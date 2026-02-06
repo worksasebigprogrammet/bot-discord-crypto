@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Crypto Tracker - Logs</title>
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+  <nav class="navbar">
+    <div class="nav-brand">Crypto Tracker</div>
+    <div class="nav-links">
+      <a href="/" class="nav-link">Dashboard</a>
+      <a href="/cryptos" class="nav-link">Cryptos</a>
+      <a href="/config" class="nav-link">Config</a>
+      <a href="/logs" class="nav-link active">Logs</a>
+      <a href="/auth/logout" class="nav-link nav-logout">Logout</a>
+    </div>
+  </nav>
+
+  <main class="container">
+    <div class="page-header">
+      <h1>Logs</h1>
+      <p class="subtitle">Recent bot activity (last 100 lines)</p>
+    </div>
+
+    <div class="card">
+      <div class="card-header-row">
+        <h2 class="card-title">Log Output</h2>
+        <button class="btn btn-secondary btn-sm" id="btn-refresh">Refresh</button>
+      </div>
+      <div class="log-container">
+        <pre class="log-output"><%= logContent %></pre>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    document.getElementById('btn-refresh').addEventListener('click', function () {
+      location.reload();
+    });
+
+    // Auto-scroll to bottom of log output
+    var logContainer = document.querySelector('.log-container');
+    if (logContainer) {
+      logContainer.scrollTop = logContainer.scrollHeight;
+    }
+  </script>
+</body>
+</html>

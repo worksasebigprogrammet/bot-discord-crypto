@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Crypto Tracker - Cryptos</title>
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+  <nav class="navbar">
+    <div class="nav-brand">Crypto Tracker</div>
+    <div class="nav-links">
+      <a href="/" class="nav-link">Dashboard</a>
+      <a href="/cryptos" class="nav-link active">Cryptos</a>
+      <a href="/config" class="nav-link">Config</a>
+      <a href="/logs" class="nav-link">Logs</a>
+      <a href="/auth/logout" class="nav-link nav-logout">Logout</a>
+    </div>
+  </nav>
+
+  <main class="container">
+    <div class="page-header">
+      <h1>Tracked Cryptocurrencies</h1>
+      <p class="subtitle">Manage which cryptocurrencies the bot tracks</p>
+    </div>
+
+    <div class="card">
+      <h2 class="card-title">Add Cryptocurrency</h2>
+      <form id="add-crypto-form" class="inline-form">
+        <input type="text" id="symbol-input" name="symbol" placeholder="Symbol (e.g. BTC)" class="input" required>
+        <button type="submit" class="btn btn-primary">Add Crypto</button>
+      </form>
+      <p id="add-status" class="action-status"></p>
+    </div>
+
+    <div class="card">
+      <h2 class="card-title">Tracked List</h2>
+      <% if (cryptos.length === 0) { %>
+        <p class="empty-message">No cryptocurrencies are being tracked yet. Add one above.</p>
+      <% } else { %>
+        <div class="table-wrapper">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Status</th>
+                <th>Symbol</th>
+                <th>Name</th>
+                <th>Price (USD)</th>
+                <th>24h Change</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              <% cryptos.forEach(function(crypto) { %>
+                <% const priceData = prices[crypto.symbol]; %>
+                <tr>
+                  <td>
+                    <span class="badge <%= crypto.enabled ? 'badge-green' : 'badge-red' %>">
+                      <%= crypto.enabled ? 'Enabled' : 'Disabled' %>
+                    </span>
+                  </td>
+                  <td class="mono"><%= crypto.symbol %></td>
+                  <td><%= crypto.name %></td>
+                  <td class="mono">
+                    <% if (priceData && priceData.price !== null && priceData.price !== undefined) { %>
+                      $<%= priceData.price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 6 }) %>
+                    <% } else { %>
+                      --
+                    <% } %>
+                  </td>
+                  <td>
+                    <% if (priceData && priceData.change24h !== null && priceData.change24h !== undefined) { %>
+                      <span class="<%= priceData.change24h >= 0 ? 'text-green' : 'text-red' %>">
+                        <%= priceData.change24h >= 0 ? '+' : '' %><%= priceData.change24h.toFixed(2) %>%
+                      </span>
+                    <% } else { %>
+                      --
+                    <% } %>
+                  </td>
+                  <td>
+                    <button class="btn btn-danger btn-sm btn-remove" data-symbol="<%= crypto.symbol %>">Remove</button>
+                  </td>
+                </tr>
+              <% }); %>
+            </tbody>
+          </table>
+        </div>
+      <% } %>
+    </div>
+  </main>
+
+  <script>
+    // Add crypto
+    document.getElementById('add-crypto-form').addEventListener('submit', async function (e) {
+      e.preventDefault();
+      const symbolInput = document.getElementById('symbol-input');
+      const statusEl = document.getElementById('add-status');
+      const symbol = symbolInput.value.trim().toUpperCase();
+
+      if (!symbol) return;
+
+      statusEl.textContent = '';
+
+      try {
+        const res = await fetch('/api/cryptos/add', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ symbol }),
+        });
+        const data = await res.json();
+
+        if (data.success) {
+          statusEl.textContent = symbol + ' added successfully.';
+          statusEl.className = 'action-status success';
+          symbolInput.value = '';
+          setTimeout(function () { location.reload(); }, 800);
+        } else {
+          statusEl.textContent = data.error || 'Failed to add crypto.';
+          statusEl.className = 'action-status error';
+        }
+      } catch (err) {
+        statusEl.textContent = 'Request failed: ' + err.message;
+        statusEl.className = 'action-status error';
+      }
+    });
+
+    // Remove crypto
+    document.querySelectorAll('.btn-remove').forEach(function (btn) {
+      btn.addEventListener('click', async function () {
+        const symbol = this.getAttribute('data-symbol');
+        if (!confirm('Remove ' + symbol + ' from tracking?')) return;
+
+        try {
+          const res = await fetch('/api/cryptos/remove', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ symbol }),
+          });
+          const data = await res.json();
+
+          if (data.success) {
+            location.reload();
+          } else {
+            alert(data.error || 'Failed to remove crypto.');
+          }
+        } catch (err) {
+          alert('Request failed: ' + err.message);
+        }
+      });
+    });
+  </script>
+</body>
+</html>
