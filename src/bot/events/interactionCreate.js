@@ -1,100 +1,112 @@
-const { Events } = require('discord.js');
 const logger = require('../../utils/logger');
 
 module.exports = {
-  name: Events.InteractionCreate,
+  name: 'interactionCreate',
+  once: false,
   async execute(interaction) {
-    // Handle slash commands
+    // --- Autocomplete ---
+    if (interaction.isAutocomplete()) {
+      const command = interaction.client.commands.get(interaction.commandName);
+      if (command && command.autocomplete) {
+        try {
+          await command.autocomplete(interaction);
+        } catch (err) {
+          logger.error('Autocomplete error', { command: interaction.commandName, error: err.message });
+        }
+      }
+      return;
+    }
+
+    // --- Slash Commands ---
     if (interaction.isChatInputCommand()) {
       const command = interaction.client.commands.get(interaction.commandName);
-      if (!command) {
-        logger.warn('Unknown command', { name: interaction.commandName });
-        return;
-      }
+      if (!command) return;
 
       try {
         await command.execute(interaction);
       } catch (err) {
-        logger.error('Command execution failed', {
+        logger.error('Command execution error', {
           command: interaction.commandName,
-          user: interaction.user.tag,
+          guildId: interaction.guildId,
+          userId: interaction.user.id,
           error: err.message,
           stack: err.stack,
         });
 
-        const errorMsg = '❌ Une erreur est survenue lors de l\'exécution de cette commande.';
+        const msg = '❌ Une erreur est survenue. Réessayez plus tard.';
         try {
           if (interaction.deferred || interaction.replied) {
-            await interaction.editReply({ content: errorMsg });
+            await interaction.editReply({ content: msg });
           } else {
-            await interaction.reply({ content: errorMsg, ephemeral: true });
+            await interaction.reply({ content: msg, ephemeral: true });
           }
-        } catch {
-          // Interaction may have expired
-        }
+        } catch { /* ignore follow-up errors */ }
       }
+      return;
     }
 
-    // Handle button interactions
+    // --- Buttons ---
     if (interaction.isButton()) {
-      try {
-        const [action, ...args] = interaction.customId.split('_');
-        
-        // Panel button handlers
-        if (action === 'panel') {
-          const panelCommand = interaction.client.commands.get('panel');
-          if (panelCommand && panelCommand.handleButton) {
-            await panelCommand.handleButton(interaction, args);
+      const customId = interaction.customId;
+      // Find the command that handles this button
+      for (const [, command] of interaction.client.commands) {
+        if (command.handleButton && customId.startsWith(command.data.name)) {
+          try {
+            await command.handleButton(interaction);
+          } catch (err) {
+            logger.error('Button handler error', { customId, error: err.message });
+            try {
+              if (!interaction.replied && !interaction.deferred) {
+                await interaction.reply({ content: '❌ Erreur.', ephemeral: true });
+              }
+            } catch { /* ignore */ }
           }
+          return;
         }
-
-        // Setup button handlers
-        if (action === 'setup') {
-          const setupCommand = interaction.client.commands.get('setup');
-          if (setupCommand && setupCommand.handleButton) {
-            await setupCommand.handleButton(interaction, args);
-          }
-        }
-      } catch (err) {
-        logger.error('Button interaction failed', { customId: interaction.customId, error: err.message });
-        try {
-          if (!interaction.replied && !interaction.deferred) {
-            await interaction.reply({ content: '❌ Erreur lors du traitement.', ephemeral: true });
-          }
-        } catch {}
       }
+      return;
     }
 
-    // Handle select menu interactions
+    // --- Select Menus ---
     if (interaction.isStringSelectMenu()) {
-      try {
-        const [action, ...args] = interaction.customId.split('_');
-        
-        if (action === 'setup') {
-          const setupCommand = interaction.client.commands.get('setup');
-          if (setupCommand && setupCommand.handleSelect) {
-            await setupCommand.handleSelect(interaction, args);
+      const customId = interaction.customId;
+      for (const [, command] of interaction.client.commands) {
+        if (command.handleSelect && customId.startsWith(command.data.name)) {
+          try {
+            await command.handleSelect(interaction);
+          } catch (err) {
+            logger.error('Select menu handler error', { customId, error: err.message });
+            try {
+              if (!interaction.replied && !interaction.deferred) {
+                await interaction.reply({ content: '❌ Erreur.', ephemeral: true });
+              }
+            } catch { /* ignore */ }
           }
+          return;
         }
-      } catch (err) {
-        logger.error('Select menu interaction failed', { customId: interaction.customId, error: err.message });
       }
+      return;
     }
 
-    // Handle modal submissions
+    // --- Modals ---
     if (interaction.isModalSubmit()) {
-      try {
-        const [action, ...args] = interaction.customId.split('_');
-        
-        if (action === 'panel') {
-          const panelCommand = interaction.client.commands.get('panel');
-          if (panelCommand && panelCommand.handleModal) {
-            await panelCommand.handleModal(interaction, args);
+      const customId = interaction.customId;
+      for (const [, command] of interaction.client.commands) {
+        if (command.handleModal && customId.startsWith(command.data.name)) {
+          try {
+            await command.handleModal(interaction);
+          } catch (err) {
+            logger.error('Modal handler error', { customId, error: err.message });
+            try {
+              if (!interaction.replied && !interaction.deferred) {
+                await interaction.reply({ content: '❌ Erreur.', ephemeral: true });
+              }
+            } catch { /* ignore */ }
           }
+          return;
         }
-      } catch (err) {
-        logger.error('Modal submission failed', { customId: interaction.customId, error: err.message });
       }
+      return;
     }
   },
 };

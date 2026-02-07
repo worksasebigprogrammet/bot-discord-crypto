@@ -1,38 +1,48 @@
 const { SlashCommandBuilder } = require('discord.js');
-const { isAdmin, denyPermission } = require('../../utils/permissions');
+const { t, getLang } = require('../../services/i18n');
+const { getGuild } = require('../../database/models/guild');
+const { isAdmin } = require('../../utils/permissions');
 const { forceUpdate } = require('../../services/scheduler');
 const logger = require('../../utils/logger');
 
-const data = new SlashCommandBuilder()
-  .setName('reload')
-  .setDescription('Forcer le rafraichissement des donnees (admin uniquement)');
+module.exports = {
+  data: new SlashCommandBuilder()
+    .setName('reload')
+    .setDescription('Force refresh all crypto data (admin only)'),
 
-async function execute(interaction) {
-  if (!isAdmin(interaction.member)) {
-    return denyPermission(interaction);
-  }
+  async execute(interaction) {
+    const guildConfig = getGuild(interaction.guildId);
+    const lang = getLang(guildConfig);
 
-  await interaction.deferReply({ ephemeral: true });
+    // Admin permission check
+    if (!isAdmin(interaction.member)) {
+      return interaction.reply({
+        content: t('errors.no_permission', lang),
+        ephemeral: true,
+      });
+    }
 
-  try {
-    const startTime = Date.now();
-    await forceUpdate(interaction.client);
-    const duration = Date.now() - startTime;
+    await interaction.deferReply();
 
-    logger.info('Force reload triggered by admin', {
-      user: interaction.user.tag,
-      duration: `${duration}ms`,
-    });
+    try {
+      const startTime = Date.now();
 
-    return interaction.editReply({
-      content: `Donnees rafraichies avec succes en ${duration}ms. Le cache a ete vide et les prix mis a jour.`,
-    });
-  } catch (error) {
-    logger.error('Reload command failed', { user: interaction.user.tag, error: error.message });
-    return interaction.editReply({
-      content: 'Une erreur est survenue lors du rafraichissement. Consultez les logs pour plus de details.',
-    });
-  }
-}
+      await forceUpdate(interaction.client);
 
-module.exports = { data, execute };
+      const duration = Date.now() - startTime;
+
+      await interaction.editReply({
+        content: t('reload.success', lang, { duration }),
+      });
+    } catch (err) {
+      logger.error('Reload command error', {
+        guildId: interaction.guildId,
+        userId: interaction.user.id,
+        error: err.message,
+      });
+      await interaction.editReply({
+        content: t('reload.error', lang),
+      });
+    }
+  },
+};

@@ -1,13 +1,12 @@
 const { ChannelType, PermissionFlagsBits } = require('discord.js');
 const logger = require('../utils/logger');
 const { formatChannelName } = require('../utils/formatter');
-const { getConfig, setConfig } = require('../database/models/config');
-const { getCryptos, updateCrypto } = require('../database/models/crypto');
+const { getGuild, updateGuild, updateCryptoInGuild, getGuildCryptos } = require('../database/models/guild');
 const { buildPriceEmbed } = require('./embed-builder');
 
 /**
- * Queue for channel name updates to respect Discord rate limits.
- * Discord allows ~2 channel name updates per 10 minutes per channel.
+ * Channel name update queue that respects Discord rate limits
+ * (2 channel name updates per 10 minutes per channel).
  */
 class ChannelManager {
   constructor() {
@@ -22,7 +21,7 @@ class ChannelManager {
    * @returns {Promise<import('discord.js').CategoryChannel>}
    */
   async ensureCategory(guild) {
-    const config = getConfig();
+    const config = getGuild(guild.id);
 
     if (config.categoryId) {
       const existing = guild.channels.cache.get(config.categoryId);
@@ -41,8 +40,8 @@ class ChannelManager {
       ],
     });
 
-    setConfig({ categoryId: category.id });
-    logger.info('Created crypto tracker category', { categoryId: category.id });
+    updateGuild(guild.id, { categoryId: category.id });
+    logger.info('Created crypto tracker category', { guildId: guild.id, categoryId: category.id });
     return category;
   }
 
@@ -53,7 +52,7 @@ class ChannelManager {
    * @returns {Promise<import('discord.js').TextChannel>}
    */
   async ensureAlertsChannel(guild, category) {
-    const config = getConfig();
+    const config = getGuild(guild.id);
 
     if (config.alertsChannelId) {
       const existing = guild.channels.cache.get(config.alertsChannelId);
@@ -73,8 +72,8 @@ class ChannelManager {
       ],
     });
 
-    setConfig({ alertsChannelId: channel.id });
-    logger.info('Created alerts channel', { channelId: channel.id });
+    updateGuild(guild.id, { alertsChannelId: channel.id });
+    logger.info('Created alerts channel', { guildId: guild.id, channelId: channel.id });
     return channel;
   }
 
@@ -99,8 +98,8 @@ class ChannelManager {
       ],
     });
 
-    updateCrypto(symbol, { channelId: channel.id });
-    logger.info('Created crypto channel', { symbol, channelId: channel.id });
+    updateCryptoInGuild(guild.id, symbol, { channelId: channel.id });
+    logger.info('Created crypto channel', { guildId: guild.id, symbol, channelId: channel.id });
     return channel;
   }
 
@@ -114,7 +113,7 @@ class ChannelManager {
       const channel = guild.channels.cache.get(channelId);
       if (channel) {
         await channel.delete('Crypto untracked');
-        logger.info('Deleted crypto channel', { channelId });
+        logger.info('Deleted crypto channel', { guildId: guild.id, channelId });
       }
     } catch (err) {
       logger.error('Failed to delete crypto channel', { channelId, error: err.message });
@@ -122,15 +121,13 @@ class ChannelManager {
   }
 
   /**
-   * Update all crypto channels with latest prices.
-   * @param {import('discord.js').Client} client
-   * @param {Object} quotes - Map of symbol -> quote data
+   * Update all crypto channels for a specific guild.
+   * @param {import('discord.js').Guild} guild
+   * @param {Object} quotes
    */
-  async updateChannels(client, quotes) {
-    const config = getConfig();
-    const cryptos = getCryptos().filter(c => c.enabled);
-    const guild = client.guilds.cache.first();
-    if (!guild) return;
+  async updateGuildChannels(guild, quotes) {
+    const config = getGuild(guild.id);
+    const cryptos = config.cryptos.filter(c => c.enabled);
 
     for (const crypto of cryptos) {
       const quote = quotes[crypto.symbol];
@@ -143,33 +140,29 @@ class ChannelManager {
       const newName = formatChannelName(crypto.symbol, quote.price, quote.change24h);
       this.queueNameUpdate(channel, newName);
 
-      // Update or send embed (not rate limited like channel names)
+      // Update or send embed
       try {
-        const embed = buildPriceEmbed(quote);
-        const topic = `${crypto.symbol} | ${new Date().toLocaleTimeString('fr-FR', { timeZone: config.timezone })} | ${quote.change24h >= 0 ? '+' : ''}${quote.change24h?.toFixed(2)}% (24h)`;
+        const embed = buildPriceEmbed(quote, config);
 
         if (crypto.messageId) {
           try {
             const msg = await channel.messages.fetch(crypto.messageId);
             await msg.edit({ embeds: [embed] });
           } catch {
-            // Message deleted, send new one
             const newMsg = await channel.send({ embeds: [embed] });
-            updateCrypto(crypto.symbol, { messageId: newMsg.id });
+            updateCryptoInGuild(guild.id, crypto.symbol, { messageId: newMsg.id });
           }
         } else {
           const newMsg = await channel.send({ embeds: [embed] });
-          updateCrypto(crypto.symbol, { messageId: newMsg.id });
+          updateCryptoInGuild(guild.id, crypto.symbol, { messageId: newMsg.id });
         }
 
         // Update topic
-        try {
-          await channel.setTopic(topic);
-        } catch {
-          // Topic update may be rate limited
-        }
+        const tz = config.timezone || 'Europe/Paris';
+        const topic = `${crypto.symbol} | ${new Date().toLocaleTimeString('fr-FR', { timeZone: tz })} | ${(quote.change24h >= 0 ? '+' : '')}${quote.change24h?.toFixed(2) || 0}% (24h)`;
+        try { await channel.setTopic(topic); } catch { /* rate limited */ }
       } catch (err) {
-        logger.error('Failed to update channel', { symbol: crypto.symbol, error: err.message });
+        logger.error('Failed to update channel', { guildId: guild.id, symbol: crypto.symbol, error: err.message });
       }
     }
 
@@ -177,18 +170,47 @@ class ChannelManager {
   }
 
   /**
-   * Queue a channel name update to respect rate limits.
-   * @param {import('discord.js').TextChannel} channel
-   * @param {string} newName
+   * Update channels across all guilds.
+   * @param {import('discord.js').Client} client
+   * @param {Object} quotes
+   */
+  async updateAllGuilds(client, quotes) {
+    const { getAllGuildIds, getGuild: getGuildConfig } = require('../database/models/guild');
+    const guildIds = getAllGuildIds();
+
+    for (const guildId of guildIds) {
+      const config = getGuildConfig(guildId);
+      if (!config.setupComplete) continue;
+
+      const guild = client.guilds.cache.get(guildId);
+      if (!guild) continue;
+
+      // Collect all symbols needed for this guild
+      const guildSymbols = config.cryptos.filter(c => c.enabled).map(c => c.symbol);
+      const guildQuotes = {};
+      for (const sym of guildSymbols) {
+        if (quotes[sym]) guildQuotes[sym] = quotes[sym];
+      }
+
+      if (Object.keys(guildQuotes).length > 0) {
+        await this.updateGuildChannels(guild, guildQuotes);
+      }
+    }
+  }
+
+  /**
+   * Queue a channel name update.
    */
   queueNameUpdate(channel, newName) {
+    // Deduplicate: remove older update for same channel
+    this.updateQueue = this.updateQueue.filter(item => item.channel.id !== channel.id);
     this.updateQueue.push({ channel, newName, queuedAt: Date.now() });
     if (!this.processing) {
       this.processQueue();
     }
   }
 
-  /** Process the channel name update queue. */
+  /** Process the channel name update queue with rate limit delays. */
   async processQueue() {
     if (this.updateQueue.length === 0) {
       this.processing = false;
@@ -205,24 +227,20 @@ class ChannelManager {
       }
     } catch (err) {
       if (err.code === 20028 || err.status === 429) {
-        // Rate limited — re-queue with delay
-        logger.warn('Rate limited on channel rename, re-queuing');
+        logger.warn('Rate limited on channel rename, delaying queue');
         this.updateQueue.unshift(item);
-        await new Promise(resolve => setTimeout(resolve, 600000)); // Wait 10 min
+        await new Promise(resolve => setTimeout(resolve, 600000));
       } else {
         logger.error('Failed to rename channel', { error: err.message });
       }
     }
 
-    // Wait 5 minutes between channel name updates
+    // Wait 5 minutes between channel name updates (Discord rate limit: 2/10min)
     await new Promise(resolve => setTimeout(resolve, 300000));
     this.processQueue();
   }
 
-  /** Get update count. */
-  getUpdateCount() {
-    return this.updateCount;
-  }
+  getUpdateCount() { return this.updateCount; }
 }
 
 module.exports = new ChannelManager();

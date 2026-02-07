@@ -1,6 +1,6 @@
 const logger = require('../utils/logger');
 
-/** In-memory price cache. */
+/** In-memory price cache optimized for 1GB RAM. */
 class CacheService {
   constructor() {
     this.cache = new Map();
@@ -8,7 +8,7 @@ class CacheService {
   }
 
   /**
-   * Get cached data for a symbol.
+   * Get cached data.
    * @param {string} key
    * @param {number} ttl - TTL in milliseconds
    * @returns {*|null}
@@ -37,31 +37,29 @@ class CacheService {
     this.cache.set(key, { data, timestamp: Date.now() });
   }
 
-  /**
-   * Get all cached prices.
-   * @param {number} ttl
-   * @returns {Object}
-   */
-  getAllPrices(ttl) {
-    const result = {};
-    for (const [key, entry] of this.cache) {
-      if (Date.now() - entry.timestamp <= ttl) {
-        result[key] = entry.data;
-      }
-    }
-    return result;
-  }
-
   /** Clear entire cache. */
   clear() {
     this.cache.clear();
-    logger.info('Cache cleared');
+    logger.debug('Cache cleared');
+  }
+
+  /** Evict stale entries older than maxAge ms. */
+  evict(maxAge = 3600000) {
+    const now = Date.now();
+    let evicted = 0;
+    for (const [key, entry] of this.cache) {
+      if (now - entry.timestamp > maxAge) {
+        this.cache.delete(key);
+        evicted++;
+      }
+    }
+    if (evicted > 0) logger.debug(`Evicted ${evicted} stale cache entries`);
   }
 
   /** Get cache hit rate. */
   getHitRate() {
     const total = this.stats.hits + this.stats.misses;
-    if (total === 0) return 0;
+    if (total === 0) return '0.0';
     return ((this.stats.hits / total) * 100).toFixed(1);
   }
 

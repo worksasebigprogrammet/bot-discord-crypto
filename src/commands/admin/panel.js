@@ -7,402 +7,470 @@ const {
   ModalBuilder,
   TextInputBuilder,
   TextInputStyle,
+  PermissionFlagsBits,
 } = require('discord.js');
 const { isAdmin, denyPermission } = require('../../utils/permissions');
-const { getConfig, setConfig, resetConfig } = require('../../database/models/config');
-const { addCrypto, removeCrypto, getCryptos, getCrypto } = require('../../database/models/crypto');
+const { t, getLang } = require('../../services/i18n');
+const { getGuild, updateGuild, resetGuild, addCryptoToGuild, removeCryptoFromGuild, getCryptoInGuild, getGuildCryptos, updateCryptoInGuild } = require('../../database/models/guild');
 const channelManager = require('../../services/channel-manager');
 const { fetchQuotes, getApiCallCount } = require('../../services/crypto-api');
-const cacheService = require('../../services/cache-service');
-const { restartScheduler, forceUpdate, getErrorCount } = require('../../services/scheduler');
 const { buildPriceEmbed, buildStatsEmbed } = require('../../services/embed-builder');
 const { isValidSymbol, isValidInterval } = require('../../utils/validators');
+const { restartScheduler, forceUpdate, getErrorCount } = require('../../services/scheduler');
 const { getTriggeredCount } = require('../../services/alert-service');
+const cacheService = require('../../services/cache-service');
+const { getGuildBots } = require('../../database/models/bot');
+const { getActiveCount: getActiveBotCount } = require('../../services/bot-manager');
 const logger = require('../../utils/logger');
 
-const data = new SlashCommandBuilder()
-  .setName('panel')
-  .setDescription('Panneau de contrôle administrateur');
+/**
+ * Build the main panel embed showing current guild configuration.
+ */
+function buildPanelEmbed(guildConfig, guild) {
+  const lang = getLang(guildConfig);
+  const cryptos = guildConfig.cryptos || [];
+  const intervalMin = Math.round((guildConfig.updateInterval || 600000) / 60000);
 
-async function execute(interaction) {
-  if (!isAdmin(interaction.member)) {
-    return denyPermission(interaction);
-  }
+  const cryptoList = cryptos.length > 0
+    ? cryptos.map(c => `${c.enabled ? '🟢' : '🔴'} **${c.symbol}**`).join(', ')
+    : t('list.empty', lang);
 
-  const config = getConfig();
-  const cryptos = getCryptos();
-  const intervalMin = Math.round(config.updateInterval / 60000);
-
-  const embed = new EmbedBuilder()
-    .setTitle('🎛️ Panneau d\'Administration')
-    .setDescription('Utilisez les boutons ci-dessous pour gérer le bot.')
+  return new EmbedBuilder()
+    .setTitle(t('panel.title', lang))
     .setColor(0x9b59b6)
     .addFields(
-      { name: '⏱️ Intervalle', value: `${intervalMin} min`, inline: true },
-      { name: '🪙 Cryptos suivies', value: `${cryptos.length}`, inline: true },
-      { name: '🚨 Seuil d\'alerte', value: `${config.alertThreshold}%`, inline: true },
-      { name: '📡 Appels API (24h)', value: `${getApiCallCount()}`, inline: true },
-      { name: '❌ Erreurs (24h)', value: `${getErrorCount()}`, inline: true },
-      { name: '📊 Setup', value: config.setupComplete ? '✅ Complet' : '❌ Incomplet', inline: true },
+      { name: '🌐 ' + (lang === 'fr' ? 'Serveur' : 'Server'), value: guild.name, inline: true },
+      { name: t('setup.interval_label', lang), value: `${intervalMin} min`, inline: true },
+      { name: t('setup.threshold_label', lang), value: `${guildConfig.alertThreshold || 5}%`, inline: true },
+      { name: t('setup.cryptos_label', lang), value: cryptoList, inline: false },
     )
     .setTimestamp()
-    .setFooter({ text: 'Crypto Tracker Bot • Admin Panel' });
-
-  const row1 = new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId('panel_add_crypto')
-      .setLabel('Ajouter Crypto')
-      .setStyle(ButtonStyle.Success)
-      .setEmoji('➕'),
-    new ButtonBuilder()
-      .setCustomId('panel_remove_crypto')
-      .setLabel('Retirer Crypto')
-      .setStyle(ButtonStyle.Danger)
-      .setEmoji('➖'),
-    new ButtonBuilder()
-      .setCustomId('panel_set_interval')
-      .setLabel('Configurer Intervalle')
-      .setStyle(ButtonStyle.Primary)
-      .setEmoji('⏱️'),
-  );
-
-  const row2 = new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId('panel_view_stats')
-      .setLabel('Voir Stats')
-      .setStyle(ButtonStyle.Secondary)
-      .setEmoji('📊'),
-    new ButtonBuilder()
-      .setCustomId('panel_force_update')
-      .setLabel('Forcer Update')
-      .setStyle(ButtonStyle.Primary)
-      .setEmoji('🔄'),
-    new ButtonBuilder()
-      .setCustomId('panel_reset_config')
-      .setLabel('Réinitialiser Config')
-      .setStyle(ButtonStyle.Danger)
-      .setEmoji('🗑️'),
-  );
-
-  return interaction.reply({ embeds: [embed], components: [row1, row2], ephemeral: true });
+    .setFooter({ text: 'Crypto Tracker Bot' });
 }
 
-async function handleButton(interaction) {
-  if (!isAdmin(interaction.member)) {
-    return interaction.reply({ content: '❌ Permission refusée.', ephemeral: true });
-  }
+module.exports = {
+  data: new SlashCommandBuilder()
+    .setName('panel')
+    .setDescription("Panel d'administration interactif")
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
 
-  const customId = interaction.customId;
-
-  switch (customId) {
-    case 'panel_add_crypto':
-      return showAddCryptoModal(interaction);
-
-    case 'panel_remove_crypto':
-      return showRemoveCryptoModal(interaction);
-
-    case 'panel_set_interval':
-      return showIntervalModal(interaction);
-
-    case 'panel_view_stats':
-      return showStats(interaction);
-
-    case 'panel_force_update':
-      return handleForceUpdate(interaction);
-
-    case 'panel_reset_config':
-      return handleResetConfig(interaction);
-
-    default:
-      return interaction.reply({ content: '❌ Action inconnue.', ephemeral: true });
-  }
-}
-
-async function showAddCryptoModal(interaction) {
-  const modal = new ModalBuilder()
-    .setCustomId('panel_modal_add_crypto')
-    .setTitle('Ajouter une crypto');
-
-  const symbolInput = new TextInputBuilder()
-    .setCustomId('crypto_symbol')
-    .setLabel('Symbole de la crypto (ex: BTC, ETH, DOGE)')
-    .setStyle(TextInputStyle.Short)
-    .setPlaceholder('BTC')
-    .setRequired(true)
-    .setMinLength(1)
-    .setMaxLength(10);
-
-  const row = new ActionRowBuilder().addComponents(symbolInput);
-  modal.addComponents(row);
-
-  return interaction.showModal(modal);
-}
-
-async function showRemoveCryptoModal(interaction) {
-  const cryptos = getCryptos();
-
-  if (cryptos.length === 0) {
-    return interaction.reply({
-      content: '⚠️ Aucune crypto n\'est actuellement suivie.',
-      ephemeral: true,
-    });
-  }
-
-  const modal = new ModalBuilder()
-    .setCustomId('panel_modal_remove_crypto')
-    .setTitle('Retirer une crypto');
-
-  const symbolInput = new TextInputBuilder()
-    .setCustomId('crypto_symbol')
-    .setLabel(`Symbole à retirer (${cryptos.map(c => c.symbol).join(', ')})`)
-    .setStyle(TextInputStyle.Short)
-    .setPlaceholder('BTC')
-    .setRequired(true)
-    .setMinLength(1)
-    .setMaxLength(10);
-
-  const row = new ActionRowBuilder().addComponents(symbolInput);
-  modal.addComponents(row);
-
-  return interaction.showModal(modal);
-}
-
-async function showIntervalModal(interaction) {
-  const modal = new ModalBuilder()
-    .setCustomId('panel_modal_interval')
-    .setTitle('Configurer l\'intervalle');
-
-  const intervalInput = new TextInputBuilder()
-    .setCustomId('interval_minutes')
-    .setLabel('Intervalle en minutes (5-60)')
-    .setStyle(TextInputStyle.Short)
-    .setPlaceholder('10')
-    .setRequired(true)
-    .setMinLength(1)
-    .setMaxLength(2);
-
-  const row = new ActionRowBuilder().addComponents(intervalInput);
-  modal.addComponents(row);
-
-  return interaction.showModal(modal);
-}
-
-async function showStats(interaction) {
-  const config = getConfig();
-  const uptimeMs = interaction.client.uptime || 0;
-  const hours = Math.floor(uptimeMs / 3600000);
-  const minutes = Math.floor((uptimeMs % 3600000) / 60000);
-  const seconds = Math.floor((uptimeMs % 60000) / 1000);
-
-  const stats = {
-    uptime: `${hours}h ${minutes}m ${seconds}s`,
-    updates: channelManager.getUpdateCount(),
-    apiCalls: getApiCallCount(),
-    alertsTriggered: getTriggeredCount(),
-    cacheHitRate: cacheService.getHitRate(),
-    errors: getErrorCount(),
-  };
-
-  const embed = buildStatsEmbed(stats);
-
-  return interaction.reply({ embeds: [embed], ephemeral: true });
-}
-
-async function handleForceUpdate(interaction) {
-  await interaction.deferReply({ ephemeral: true });
-
-  try {
-    await forceUpdate(interaction.client);
-
-    const embed = new EmbedBuilder()
-      .setTitle('✅ Mise à jour forcée')
-      .setDescription('Les prix ont été mis à jour avec succès.')
-      .setColor(0x2ecc71)
-      .setTimestamp()
-      .setFooter({ text: 'Crypto Tracker Bot • Admin Panel' });
-
-    return interaction.editReply({ embeds: [embed] });
-  } catch (err) {
-    logger.error('Force update from panel failed', { error: err.message });
-    return interaction.editReply({
-      content: `❌ Erreur lors de la mise à jour : \`${err.message}\``,
-    });
-  }
-}
-
-async function handleResetConfig(interaction) {
-  resetConfig();
-  logger.info('Config reset from panel', { userId: interaction.user.id });
-
-  const embed = new EmbedBuilder()
-    .setTitle('✅ Configuration réinitialisée')
-    .setDescription(
-      'Tous les paramètres ont été remis à zéro.\n' +
-      'Utilisez `/setup` pour reconfigurer le bot.'
-    )
-    .setColor(0xe74c3c)
-    .setTimestamp()
-    .setFooter({ text: 'Crypto Tracker Bot • Admin Panel' });
-
-  return interaction.reply({ embeds: [embed], ephemeral: true });
-}
-
-async function handleModal(interaction) {
-  if (!isAdmin(interaction.member)) {
-    return interaction.reply({ content: '❌ Permission refusée.', ephemeral: true });
-  }
-
-  const customId = interaction.customId;
-
-  switch (customId) {
-    case 'panel_modal_add_crypto':
-      return handleAddCryptoModal(interaction);
-    case 'panel_modal_remove_crypto':
-      return handleRemoveCryptoModal(interaction);
-    case 'panel_modal_interval':
-      return handleIntervalModal(interaction);
-    default:
-      return interaction.reply({ content: '❌ Action inconnue.', ephemeral: true });
-  }
-}
-
-async function handleAddCryptoModal(interaction) {
-  const rawSymbol = interaction.fields.getTextInputValue('crypto_symbol');
-  const symbol = rawSymbol.toUpperCase().trim();
-
-  if (!isValidSymbol(symbol)) {
-    return interaction.reply({
-      content: `❌ Symbole invalide : \`${rawSymbol}\`.`,
-      ephemeral: true,
-    });
-  }
-
-  const existing = getCrypto(symbol);
-  if (existing) {
-    return interaction.reply({
-      content: `⚠️ **${symbol}** est déjà suivi.`,
-      ephemeral: true,
-    });
-  }
-
-  const config = getConfig();
-  if (!config.categoryId) {
-    return interaction.reply({
-      content: '❌ Le bot n\'est pas configuré. Lancez `/setup` d\'abord.',
-      ephemeral: true,
-    });
-  }
-
-  await interaction.deferReply({ ephemeral: true });
-
-  try {
-    const crypto = addCrypto(symbol, symbol);
-    if (!crypto) {
-      return interaction.editReply({ content: `❌ Impossible d'ajouter **${symbol}**.` });
+  /**
+   * Execute the /panel command: display the admin control panel.
+   */
+  async execute(interaction) {
+    if (!isAdmin(interaction.member)) {
+      return denyPermission(interaction);
     }
 
-    const guild = interaction.guild;
-    const category = guild.channels.cache.get(config.categoryId);
+    const guildId = interaction.guildId;
+    const config = getGuild(guildId);
+    const lang = getLang(config);
 
-    if (!category) {
-      return interaction.editReply({ content: '❌ Catégorie introuvable.' });
+    const embed = buildPanelEmbed(config, interaction.guild);
+
+    const row1 = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId('panel_add')
+        .setLabel(t('panel.add_crypto', lang))
+        .setStyle(ButtonStyle.Success),
+      new ButtonBuilder()
+        .setCustomId('panel_remove')
+        .setLabel(t('panel.remove_crypto', lang))
+        .setStyle(ButtonStyle.Danger),
+      new ButtonBuilder()
+        .setCustomId('panel_interval')
+        .setLabel(t('panel.config_interval', lang))
+        .setStyle(ButtonStyle.Primary),
+    );
+
+    const row2 = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId('panel_stats')
+        .setLabel(t('panel.view_stats', lang))
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId('panel_update')
+        .setLabel(t('panel.force_update', lang))
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId('panel_language')
+        .setLabel(t('panel.set_language', lang))
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId('panel_reset')
+        .setLabel(t('panel.reset_config', lang))
+        .setStyle(ButtonStyle.Danger),
+    );
+
+    await interaction.reply({
+      embeds: [embed],
+      components: [row1, row2],
+      ephemeral: true,
+    });
+  },
+
+  /**
+   * Handle button interactions for the admin panel.
+   */
+  async handleButton(interaction) {
+    if (!isAdmin(interaction.member)) {
+      return denyPermission(interaction);
     }
 
-    const channel = await channelManager.createCryptoChannel(guild, category, symbol);
+    const guildId = interaction.guildId;
+    const config = getGuild(guildId);
+    const lang = getLang(config);
+    const customId = interaction.customId;
 
-    // Fetch initial quote
-    try {
-      const quotes = await fetchQuotes([symbol]);
-      if (quotes[symbol]) {
-        const embed = buildPriceEmbed(quotes[symbol]);
-        const msg = await channel.send({ embeds: [embed] });
-        const { updateCrypto } = require('../../database/models/crypto');
-        updateCrypto(symbol, { messageId: msg.id });
+    // --- Add Crypto: show modal ---
+    if (customId === 'panel_add') {
+      const modal = new ModalBuilder()
+        .setCustomId('panel_modal_add')
+        .setTitle(t('panel.add_crypto', lang));
+
+      const symbolInput = new TextInputBuilder()
+        .setCustomId('panel_add_symbol')
+        .setLabel('Symbol (ex: BTC, ETH, SOL)')
+        .setStyle(TextInputStyle.Short)
+        .setPlaceholder('BTC')
+        .setRequired(true)
+        .setMinLength(1)
+        .setMaxLength(10);
+
+      modal.addComponents(new ActionRowBuilder().addComponents(symbolInput));
+      return interaction.showModal(modal);
+    }
+
+    // --- Remove Crypto: show modal ---
+    if (customId === 'panel_remove') {
+      const modal = new ModalBuilder()
+        .setCustomId('panel_modal_remove')
+        .setTitle(t('panel.remove_crypto', lang));
+
+      const symbolInput = new TextInputBuilder()
+        .setCustomId('panel_remove_symbol')
+        .setLabel('Symbol (ex: BTC, ETH, SOL)')
+        .setStyle(TextInputStyle.Short)
+        .setPlaceholder('BTC')
+        .setRequired(true)
+        .setMinLength(1)
+        .setMaxLength(10);
+
+      modal.addComponents(new ActionRowBuilder().addComponents(symbolInput));
+      return interaction.showModal(modal);
+    }
+
+    // --- Interval: show modal ---
+    if (customId === 'panel_interval') {
+      const modal = new ModalBuilder()
+        .setCustomId('panel_modal_interval')
+        .setTitle(t('panel.config_interval', lang));
+
+      const intervalInput = new TextInputBuilder()
+        .setCustomId('panel_interval_value')
+        .setLabel('Interval (5-60 minutes)')
+        .setStyle(TextInputStyle.Short)
+        .setPlaceholder('10')
+        .setRequired(true)
+        .setMinLength(1)
+        .setMaxLength(2);
+
+      modal.addComponents(new ActionRowBuilder().addComponents(intervalInput));
+      return interaction.showModal(modal);
+    }
+
+    // --- Stats ---
+    if (customId === 'panel_stats') {
+      await interaction.deferReply({ ephemeral: true });
+
+      const uptime = formatUptime(global.botStartTime);
+      const servers = interaction.client.guilds.cache.size;
+      const { getAllGuildIds } = require('../../database/models/guild');
+      const allGuildIds = getAllGuildIds();
+      let totalCryptos = 0;
+      for (const gId of allGuildIds) {
+        const gc = getGuild(gId);
+        totalCryptos += (gc.cryptos || []).length;
       }
-    } catch (err) {
-      logger.warn('Failed to fetch initial quote from panel', { symbol, error: err.message });
+
+      const stats = {
+        uptime,
+        servers,
+        cryptosTracked: totalCryptos,
+        apiCalls: getApiCallCount(),
+        alertsTriggered: getTriggeredCount(),
+        cacheHitRate: cacheService.getHitRate(),
+        memory: `${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)} MB`,
+        errors: getErrorCount(),
+        externalBots: getActiveBotCount(),
+      };
+
+      const statsEmbed = buildStatsEmbed(stats, config);
+      return interaction.editReply({ embeds: [statsEmbed] });
     }
 
-    logger.info('Crypto added from panel', { symbol, userId: interaction.user.id });
+    // --- Force Update ---
+    if (customId === 'panel_update') {
+      await interaction.deferReply({ ephemeral: true });
 
-    const embed = new EmbedBuilder()
-      .setTitle('✅ Crypto ajoutée')
-      .setDescription(`**${symbol}** est maintenant suivi dans <#${channel.id}>.`)
-      .setColor(0x2ecc71)
-      .setTimestamp();
+      try {
+        const start = Date.now();
+        await forceUpdate(interaction.client);
+        const duration = Date.now() - start;
 
-    return interaction.editReply({ embeds: [embed] });
-  } catch (err) {
-    logger.error('Failed to add crypto from panel', { symbol, error: err.message });
-    return interaction.editReply({ content: `❌ Erreur : \`${err.message}\`` });
-  }
-}
-
-async function handleRemoveCryptoModal(interaction) {
-  const rawSymbol = interaction.fields.getTextInputValue('crypto_symbol');
-  const symbol = rawSymbol.toUpperCase().trim();
-
-  if (!isValidSymbol(symbol)) {
-    return interaction.reply({
-      content: `❌ Symbole invalide : \`${rawSymbol}\`.`,
-      ephemeral: true,
-    });
-  }
-
-  const existing = getCrypto(symbol);
-  if (!existing) {
-    return interaction.reply({
-      content: `⚠️ **${symbol}** n'est pas suivi.`,
-      ephemeral: true,
-    });
-  }
-
-  await interaction.deferReply({ ephemeral: true });
-
-  try {
-    if (existing.channelId) {
-      await channelManager.deleteCryptoChannel(interaction.guild, existing.channelId);
+        return interaction.editReply({
+          content: t('reload.success', lang, { duration }),
+        });
+      } catch (err) {
+        logger.error('Panel force update failed', { guildId, error: err.message });
+        return interaction.editReply({
+          content: t('reload.fail', lang),
+        });
+      }
     }
 
-    removeCrypto(symbol);
-    logger.info('Crypto removed from panel', { symbol, userId: interaction.user.id });
+    // --- Language toggle ---
+    if (customId === 'panel_language') {
+      const newLang = config.language === 'fr' ? 'en' : 'fr';
+      updateGuild(guildId, { language: newLang });
 
-    const embed = new EmbedBuilder()
-      .setTitle('✅ Crypto retirée')
-      .setDescription(`**${symbol}** a été retiré du suivi.`)
-      .setColor(0xe74c3c)
-      .setTimestamp();
+      const langLabel = newLang === 'fr' ? 'Francais' : 'English';
 
-    return interaction.editReply({ embeds: [embed] });
-  } catch (err) {
-    logger.error('Failed to remove crypto from panel', { symbol, error: err.message });
-    return interaction.editReply({ content: `❌ Erreur : \`${err.message}\`` });
-  }
+      logger.info('Panel language toggled', { guildId, language: newLang });
+
+      // Rebuild the panel with the new language
+      const updatedConfig = getGuild(guildId);
+      const updatedLang = getLang(updatedConfig);
+      const embed = buildPanelEmbed(updatedConfig, interaction.guild);
+
+      const row1 = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId('panel_add')
+          .setLabel(t('panel.add_crypto', updatedLang))
+          .setStyle(ButtonStyle.Success),
+        new ButtonBuilder()
+          .setCustomId('panel_remove')
+          .setLabel(t('panel.remove_crypto', updatedLang))
+          .setStyle(ButtonStyle.Danger),
+        new ButtonBuilder()
+          .setCustomId('panel_interval')
+          .setLabel(t('panel.config_interval', updatedLang))
+          .setStyle(ButtonStyle.Primary),
+      );
+
+      const row2 = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId('panel_stats')
+          .setLabel(t('panel.view_stats', updatedLang))
+          .setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
+          .setCustomId('panel_update')
+          .setLabel(t('panel.force_update', updatedLang))
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId('panel_language')
+          .setLabel(t('panel.set_language', updatedLang))
+          .setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
+          .setCustomId('panel_reset')
+          .setLabel(t('panel.reset_config', updatedLang))
+          .setStyle(ButtonStyle.Danger),
+      );
+
+      return interaction.update({
+        content: t('config.language_set', updatedLang, { value: langLabel }),
+        embeds: [embed],
+        components: [row1, row2],
+      });
+    }
+
+    // --- Reset ---
+    if (customId === 'panel_reset') {
+      // Clean up channels
+      try {
+        for (const crypto of config.cryptos) {
+          if (crypto.channelId) {
+            await channelManager.deleteCryptoChannel(interaction.guild, crypto.channelId);
+          }
+        }
+        if (config.alertsChannelId) {
+          const alertsCh = interaction.guild.channels.cache.get(config.alertsChannelId);
+          if (alertsCh) {
+            try { await alertsCh.delete('Panel reset'); } catch { /* ignore */ }
+          }
+        }
+        if (config.categoryId) {
+          const category = interaction.guild.channels.cache.get(config.categoryId);
+          if (category) {
+            try { await category.delete('Panel reset'); } catch { /* ignore */ }
+          }
+        }
+      } catch (err) {
+        logger.error('Error cleaning up channels during panel reset', { guildId, error: err.message });
+      }
+
+      resetGuild(guildId);
+      logger.info('Guild config reset via panel', { guildId });
+
+      const embed = new EmbedBuilder()
+        .setTitle(t('config.reset_done', lang))
+        .setColor(0x00ff41);
+
+      return interaction.update({ embeds: [embed], components: [] });
+    }
+  },
+
+  /**
+   * Handle modal submissions for the admin panel.
+   */
+  async handleModal(interaction) {
+    if (!isAdmin(interaction.member)) {
+      return denyPermission(interaction);
+    }
+
+    const guildId = interaction.guildId;
+    const config = getGuild(guildId);
+    const lang = getLang(config);
+    const customId = interaction.customId;
+
+    // --- Modal: Add Crypto ---
+    if (customId === 'panel_modal_add') {
+      const symbol = interaction.fields.getTextInputValue('panel_add_symbol').toUpperCase().trim();
+
+      if (!isValidSymbol(symbol)) {
+        return interaction.reply({
+          content: t('track.invalid_symbol', lang, { symbol }),
+          ephemeral: true,
+        });
+      }
+
+      if (getCryptoInGuild(guildId, symbol)) {
+        return interaction.reply({
+          content: t('track.already_tracked', lang, { symbol }),
+          ephemeral: true,
+        });
+      }
+
+      if (!config.setupComplete) {
+        return interaction.reply({
+          content: t('track.setup_required', lang),
+          ephemeral: true,
+        });
+      }
+
+      await interaction.deferReply({ ephemeral: true });
+
+      try {
+        const quotes = await fetchQuotes([symbol]);
+        const quote = quotes[symbol];
+
+        if (!quote) {
+          return interaction.editReply({
+            content: t('track.not_found', lang, { symbol }),
+          });
+        }
+
+        const entry = addCryptoToGuild(guildId, symbol, quote.name || symbol);
+        if (!entry) {
+          return interaction.editReply({
+            content: t('track.already_tracked', lang, { symbol }),
+          });
+        }
+
+        const category = await channelManager.ensureCategory(interaction.guild);
+        const channel = await channelManager.createCryptoChannel(interaction.guild, category, symbol);
+        updateCryptoInGuild(guildId, symbol, { channelId: channel.id });
+
+        const updatedConfig = getGuild(guildId);
+        const embed = buildPriceEmbed(quote, updatedConfig);
+        const msg = await channel.send({ embeds: [embed] });
+        updateCryptoInGuild(guildId, symbol, { messageId: msg.id });
+
+        logger.info('Crypto tracked via panel', { guildId, symbol });
+
+        return interaction.editReply({
+          content: t('track.added', lang, { symbol, channel: `<#${channel.id}>` }),
+        });
+      } catch (err) {
+        logger.error('Panel add crypto failed', { guildId, symbol, error: err.message });
+        return interaction.editReply({
+          content: t('error.api_fail', lang),
+        });
+      }
+    }
+
+    // --- Modal: Remove Crypto ---
+    if (customId === 'panel_modal_remove') {
+      const symbol = interaction.fields.getTextInputValue('panel_remove_symbol').toUpperCase().trim();
+
+      if (!isValidSymbol(symbol)) {
+        return interaction.reply({
+          content: t('track.invalid_symbol', lang, { symbol }),
+          ephemeral: true,
+        });
+      }
+
+      const cryptoEntry = getCryptoInGuild(guildId, symbol);
+      if (!cryptoEntry) {
+        return interaction.reply({
+          content: t('untrack.not_tracked', lang, { symbol }),
+          ephemeral: true,
+        });
+      }
+
+      // Delete channel
+      if (cryptoEntry.channelId) {
+        try {
+          await channelManager.deleteCryptoChannel(interaction.guild, cryptoEntry.channelId);
+        } catch (err) {
+          logger.error('Failed to delete channel via panel remove', { guildId, symbol, error: err.message });
+        }
+      }
+
+      removeCryptoFromGuild(guildId, symbol);
+      logger.info('Crypto untracked via panel', { guildId, symbol });
+
+      return interaction.reply({
+        content: t('untrack.removed', lang, { symbol }),
+        ephemeral: true,
+      });
+    }
+
+    // --- Modal: Change Interval ---
+    if (customId === 'panel_modal_interval') {
+      const raw = interaction.fields.getTextInputValue('panel_interval_value').trim();
+      const minutes = parseInt(raw, 10);
+
+      if (!isValidInterval(minutes)) {
+        return interaction.reply({
+          content: t('error.invalid_interval', lang),
+          ephemeral: true,
+        });
+      }
+
+      updateGuild(guildId, { updateInterval: minutes * 60 * 1000 });
+      restartScheduler(interaction.client);
+
+      logger.info('Interval updated via panel', { guildId, minutes });
+
+      return interaction.reply({
+        content: t('config.interval_set', lang, { value: minutes }),
+        ephemeral: true,
+      });
+    }
+  },
+};
+
+/**
+ * Format uptime from a start timestamp to "Xd Xh Xm".
+ * @param {number} startTime - Timestamp in ms
+ * @returns {string}
+ */
+function formatUptime(startTime) {
+  if (!startTime) return '0d 0h 0m';
+  const diff = Date.now() - startTime;
+  const days = Math.floor(diff / 86400000);
+  const hours = Math.floor((diff % 86400000) / 3600000);
+  const minutes = Math.floor((diff % 3600000) / 60000);
+  return `${days}d ${hours}h ${minutes}m`;
 }
-
-async function handleIntervalModal(interaction) {
-  const rawMinutes = interaction.fields.getTextInputValue('interval_minutes');
-  const minutes = parseInt(rawMinutes, 10);
-
-  if (!isValidInterval(minutes)) {
-    return interaction.reply({
-      content: '❌ L\'intervalle doit être un nombre entier entre 5 et 60.',
-      ephemeral: true,
-    });
-  }
-
-  setConfig({ updateInterval: minutes * 60 * 1000 });
-  restartScheduler(interaction.client);
-
-  logger.info('Interval updated from panel', { minutes, userId: interaction.user.id });
-
-  const embed = new EmbedBuilder()
-    .setTitle('✅ Intervalle mis à jour')
-    .setDescription(`L'intervalle a été défini à **${minutes} minutes**.\nLe scheduler a été redémarré.`)
-    .setColor(0x2ecc71)
-    .setTimestamp();
-
-  return interaction.reply({ embeds: [embed], ephemeral: true });
-}
-
-module.exports = { data, execute, handleButton, handleModal };

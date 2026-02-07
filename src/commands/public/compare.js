@@ -1,84 +1,105 @@
 const { SlashCommandBuilder } = require('discord.js');
+const { t, getLang } = require('../../services/i18n');
+const { getGuild } = require('../../database/models/guild');
 const { fetchQuotes } = require('../../services/crypto-api');
 const { buildCompareEmbed } = require('../../services/embed-builder');
-const { isValidSymbol } = require('../../utils/validators');
 const logger = require('../../utils/logger');
 
-const data = new SlashCommandBuilder()
-  .setName('compare')
-  .setDescription('Comparer deux cryptomonnaies')
-  .addStringOption(option =>
-    option
-      .setName('symbol1')
-      .setDescription('Premiere crypto (ex: BTC)')
-      .setRequired(true)
-  )
-  .addStringOption(option =>
-    option
-      .setName('symbol2')
-      .setDescription('Deuxieme crypto (ex: ETH)')
-      .setRequired(true)
-  );
+module.exports = {
+  data: new SlashCommandBuilder()
+    .setName('compare')
+    .setDescription('Compare multiple cryptocurrencies side by side')
+    .addStringOption(option =>
+      option
+        .setName('crypto1')
+        .setDescription('First crypto symbol (e.g. BTC)')
+        .setRequired(true)
+    )
+    .addStringOption(option =>
+      option
+        .setName('crypto2')
+        .setDescription('Second crypto symbol (e.g. ETH)')
+        .setRequired(true)
+    )
+    .addStringOption(option =>
+      option
+        .setName('crypto3')
+        .setDescription('Third crypto symbol (optional)')
+        .setRequired(false)
+    )
+    .addStringOption(option =>
+      option
+        .setName('crypto4')
+        .setDescription('Fourth crypto symbol (optional)')
+        .setRequired(false)
+    )
+    .addStringOption(option =>
+      option
+        .setName('crypto5')
+        .setDescription('Fifth crypto symbol (optional)')
+        .setRequired(false)
+    ),
 
-async function execute(interaction) {
-  const symbol1 = interaction.options.getString('symbol1').toUpperCase().trim();
-  const symbol2 = interaction.options.getString('symbol2').toUpperCase().trim();
+  async execute(interaction) {
+    const guildConfig = getGuild(interaction.guildId);
+    const lang = getLang(guildConfig);
 
-  if (!isValidSymbol(symbol1)) {
-    return interaction.reply({
-      content: `Symbole invalide: \`${symbol1}\`. Utilisez un symbole valide (ex: BTC, ETH, SOL).`,
-      ephemeral: true,
-    });
-  }
+    // Collect all provided symbols
+    const optionNames = ['crypto1', 'crypto2', 'crypto3', 'crypto4', 'crypto5'];
+    const symbols = optionNames
+      .map(name => interaction.options.getString(name))
+      .filter(value => value != null)
+      .map(value => value.toUpperCase());
 
-  if (!isValidSymbol(symbol2)) {
-    return interaction.reply({
-      content: `Symbole invalide: \`${symbol2}\`. Utilisez un symbole valide (ex: BTC, ETH, SOL).`,
-      ephemeral: true,
-    });
-  }
-
-  if (symbol1 === symbol2) {
-    return interaction.reply({
-      content: 'Vous ne pouvez pas comparer une crypto avec elle-meme. Choisissez deux cryptos differentes.',
-      ephemeral: true,
-    });
-  }
-
-  await interaction.deferReply({ ephemeral: true });
-
-  try {
-    const quotes = await fetchQuotes([symbol1, symbol2]);
-
-    const quote1 = quotes[symbol1];
-    const quote2 = quotes[symbol2];
-
-    if (!quote1 && !quote2) {
-      return interaction.editReply({
-        content: `Cryptos \`${symbol1}\` et \`${symbol2}\` introuvables. Verifiez les symboles.`,
+    // Validate no duplicates
+    const unique = [...new Set(symbols)];
+    if (unique.length !== symbols.length) {
+      return interaction.reply({
+        content: t('compare.duplicate_error', lang),
+        ephemeral: true,
       });
     }
 
-    if (!quote1) {
-      return interaction.editReply({
-        content: `Crypto \`${symbol1}\` introuvable. Verifiez le symbole.`,
+    await interaction.deferReply();
+
+    try {
+      const quotes = await fetchQuotes(unique);
+
+      // Check that all symbols were found
+      const found = [];
+      const notFound = [];
+      for (const symbol of unique) {
+        if (quotes[symbol]) {
+          found.push(quotes[symbol]);
+        } else {
+          notFound.push(symbol);
+        }
+      }
+
+      if (found.length === 0) {
+        return interaction.editReply({
+          content: t('compare.none_found', lang, { symbols: unique.join(', ') }),
+        });
+      }
+
+      const embed = buildCompareEmbed(found, guildConfig);
+
+      // Append warning if some were not found
+      if (notFound.length > 0) {
+        const warningText = t('compare.partial_warning', lang, { symbols: notFound.join(', ') });
+        await interaction.editReply({ content: warningText, embeds: [embed] });
+      } else {
+        await interaction.editReply({ embeds: [embed] });
+      }
+    } catch (err) {
+      logger.error('Compare command error', {
+        guildId: interaction.guildId,
+        symbols: unique.join(','),
+        error: err.message,
+      });
+      await interaction.editReply({
+        content: t('errors.api_failed', lang),
       });
     }
-
-    if (!quote2) {
-      return interaction.editReply({
-        content: `Crypto \`${symbol2}\` introuvable. Verifiez le symbole.`,
-      });
-    }
-
-    const embed = buildCompareEmbed(quote1, quote2);
-    return interaction.editReply({ embeds: [embed] });
-  } catch (error) {
-    logger.error('Compare command failed', { symbol1, symbol2, error: error.message });
-    return interaction.editReply({
-      content: 'Une erreur est survenue lors de la comparaison. Reessayez plus tard.',
-    });
-  }
-}
-
-module.exports = { data, execute };
+  },
+};

@@ -5,8 +5,8 @@ const logger = require('./utils/logger');
 const fs = require('fs');
 const path = require('path');
 
-// Ensure data and logs directories exist
-for (const dir of ['data', 'logs']) {
+// Ensure data directories exist
+for (const dir of ['data', 'data/guilds', 'data/bots', 'logs']) {
   const dirPath = path.join(__dirname, '..', dir);
   if (!fs.existsSync(dirPath)) {
     fs.mkdirSync(dirPath, { recursive: true });
@@ -33,12 +33,6 @@ for (const file of eventFiles) {
   logger.debug('Registered event', { name: event.name });
 }
 
-// Start web dashboard
-if (process.env.WEB_PORT) {
-  const { startWebServer } = require('./web/server');
-  startWebServer(client);
-}
-
 // Login to Discord
 client.login(process.env.DISCORD_TOKEN)
   .then(() => logger.info('Bot login initiated'))
@@ -51,7 +45,9 @@ client.login(process.env.DISCORD_TOKEN)
 process.on('SIGINT', () => {
   logger.info('Received SIGINT, shutting down...');
   const { stopScheduler } = require('./services/scheduler');
+  const { stopAllBots } = require('./services/bot-manager');
   stopScheduler();
+  stopAllBots();
   client.destroy();
   process.exit(0);
 });
@@ -59,7 +55,9 @@ process.on('SIGINT', () => {
 process.on('SIGTERM', () => {
   logger.info('Received SIGTERM, shutting down...');
   const { stopScheduler } = require('./services/scheduler');
+  const { stopAllBots } = require('./services/bot-manager');
   stopScheduler();
+  stopAllBots();
   client.destroy();
   process.exit(0);
 });

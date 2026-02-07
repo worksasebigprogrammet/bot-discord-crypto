@@ -5,325 +5,336 @@ const {
   ButtonBuilder,
   ButtonStyle,
   StringSelectMenuBuilder,
+  PermissionFlagsBits,
 } = require('discord.js');
 const { isAdmin, denyPermission } = require('../../utils/permissions');
-const { getConfig, setConfig } = require('../../database/models/config');
-const { addCrypto, getCryptos } = require('../../database/models/crypto');
+const { t, getLang } = require('../../services/i18n');
+const { getGuild, updateGuild, addCryptoToGuild, updateCryptoInGuild } = require('../../database/models/guild');
 const channelManager = require('../../services/channel-manager');
 const { fetchQuotes } = require('../../services/crypto-api');
+const { buildPriceEmbed } = require('../../services/embed-builder');
 const { startScheduler } = require('../../services/scheduler');
 const logger = require('../../utils/logger');
 
-// Temporary setup state per guild
+/** In-memory store for active setup sessions, keyed by guildId. */
 const setupSessions = new Map();
 
-const CRYPTO_OPTIONS = [
-  { label: 'Bitcoin (BTC)', value: 'BTC', emoji: '🪙' },
-  { label: 'Ethereum (ETH)', value: 'ETH', emoji: '💎' },
-  { label: 'Solana (SOL)', value: 'SOL', emoji: '☀️' },
-  { label: 'BNB (BNB)', value: 'BNB', emoji: '🔶' },
-  { label: 'XRP (XRP)', value: 'XRP', emoji: '💧' },
-  { label: 'Cardano (ADA)', value: 'ADA', emoji: '🔵' },
-  { label: 'Polkadot (DOT)', value: 'DOT', emoji: '⚪' },
-  { label: 'Polygon (MATIC)', value: 'MATIC', emoji: '🟣' },
-  { label: 'Avalanche (AVAX)', value: 'AVAX', emoji: '🔺' },
-  { label: 'Chainlink (LINK)', value: 'LINK', emoji: '🔗' },
+const TOP_CRYPTOS = [
+  { symbol: 'BTC', name: 'Bitcoin' },
+  { symbol: 'ETH', name: 'Ethereum' },
+  { symbol: 'SOL', name: 'Solana' },
+  { symbol: 'BNB', name: 'BNB' },
+  { symbol: 'XRP', name: 'XRP' },
+  { symbol: 'ADA', name: 'Cardano' },
+  { symbol: 'DOT', name: 'Polkadot' },
+  { symbol: 'MATIC', name: 'Polygon' },
+  { symbol: 'AVAX', name: 'Avalanche' },
+  { symbol: 'LINK', name: 'Chainlink' },
 ];
 
-const data = new SlashCommandBuilder()
-  .setName('setup')
-  .setDescription('Configuration guidée du bot');
+module.exports = {
+  data: new SlashCommandBuilder()
+    .setName('setup')
+    .setDescription('Configuration guidee du bot')
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
 
-async function execute(interaction) {
-  if (!isAdmin(interaction.member)) {
-    return denyPermission(interaction);
-  }
-
-  const config = getConfig();
-  if (config.setupComplete) {
-    return interaction.reply({
-      content: '⚠️ Le bot est déjà configuré. Utilisez `/config reset` pour réinitialiser avant de relancer le setup.',
-      ephemeral: true,
-    });
-  }
-
-  const guildId = interaction.guild.id;
-
-  // Initialize setup session
-  setupSessions.set(guildId, {
-    step: 'interval',
-    interval: null,
-    cryptos: [],
-    threshold: 5,
-    userId: interaction.user.id,
-  });
-
-  // Step 1: Choose interval
-  const embed = new EmbedBuilder()
-    .setTitle('🛠️ Assistant de Configuration')
-    .setDescription(
-      'Bienvenue dans l\'assistant de configuration du **Crypto Tracker Bot** !\n\n' +
-      '**Étape 1/4** — Choisissez l\'intervalle de mise à jour des prix :'
-    )
-    .setColor(0x3498db)
-    .addFields({
-      name: '⏱️ Intervalle',
-      value: 'Sélectionnez la fréquence de mise à jour des canaux de prix.',
-    })
-    .setFooter({ text: 'Setup Crypto Tracker Bot' });
-
-  const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId('setup_interval_5')
-      .setLabel('5 min')
-      .setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder()
-      .setCustomId('setup_interval_10')
-      .setLabel('10 min')
-      .setStyle(ButtonStyle.Primary),
-    new ButtonBuilder()
-      .setCustomId('setup_interval_15')
-      .setLabel('15 min')
-      .setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder()
-      .setCustomId('setup_interval_30')
-      .setLabel('30 min')
-      .setStyle(ButtonStyle.Secondary),
-  );
-
-  await interaction.reply({ embeds: [embed], components: [row], ephemeral: true });
-}
-
-async function handleButton(interaction) {
-  const guildId = interaction.guild.id;
-  const session = setupSessions.get(guildId);
-
-  if (!session || session.userId !== interaction.user.id) {
-    return interaction.reply({ content: '❌ Session de setup non trouvée ou non autorisée.', ephemeral: true });
-  }
-
-  const customId = interaction.customId;
-
-  // Handle interval selection buttons
-  if (customId.startsWith('setup_interval_')) {
-    const minutes = parseInt(customId.replace('setup_interval_', ''), 10);
-    session.interval = minutes;
-    session.step = 'cryptos';
-
-    // Step 2: Select cryptos
-    const embed = new EmbedBuilder()
-      .setTitle('🛠️ Assistant de Configuration')
-      .setDescription(
-        `✅ Intervalle défini à **${minutes} minutes**.\n\n` +
-        '**Étape 2/4** — Sélectionnez les cryptomonnaies à suivre :'
-      )
-      .setColor(0x3498db)
-      .addFields({
-        name: '🪙 Cryptomonnaies',
-        value: 'Choisissez une ou plusieurs cryptos dans le menu ci-dessous.',
-      })
-      .setFooter({ text: 'Setup Crypto Tracker Bot' });
-
-    const selectMenu = new StringSelectMenuBuilder()
-      .setCustomId('setup_crypto_select')
-      .setPlaceholder('Sélectionnez les cryptos à suivre...')
-      .setMinValues(1)
-      .setMaxValues(CRYPTO_OPTIONS.length)
-      .addOptions(CRYPTO_OPTIONS);
-
-    const row = new ActionRowBuilder().addComponents(selectMenu);
-
-    await interaction.update({ embeds: [embed], components: [row] });
-    return;
-  }
-
-  // Handle threshold buttons
-  if (customId.startsWith('setup_threshold_')) {
-    const threshold = parseFloat(customId.replace('setup_threshold_', ''));
-    session.threshold = threshold;
-    session.step = 'confirm';
-
-    // Step 4: Confirmation
-    const embed = new EmbedBuilder()
-      .setTitle('🛠️ Assistant de Configuration — Confirmation')
-      .setDescription(
-        '**Récapitulatif de la configuration :**\n\n' +
-        `⏱️ **Intervalle :** ${session.interval} minutes\n` +
-        `🪙 **Cryptos :** ${session.cryptos.join(', ')}\n` +
-        `🚨 **Seuil d'alerte :** ${session.threshold}%\n\n` +
-        'Cliquez sur **Confirmer** pour appliquer la configuration.'
-      )
-      .setColor(0x2ecc71)
-      .setFooter({ text: 'Setup Crypto Tracker Bot' });
-
-    const row = new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId('setup_confirm')
-        .setLabel('Confirmer')
-        .setStyle(ButtonStyle.Success)
-        .setEmoji('✅'),
-      new ButtonBuilder()
-        .setCustomId('setup_cancel')
-        .setLabel('Annuler')
-        .setStyle(ButtonStyle.Danger)
-        .setEmoji('❌'),
-    );
-
-    await interaction.update({ embeds: [embed], components: [row] });
-    return;
-  }
-
-  // Handle confirm
-  if (customId === 'setup_confirm') {
-    await interaction.update({
-      embeds: [
-        new EmbedBuilder()
-          .setTitle('⏳ Configuration en cours...')
-          .setDescription('Création des canaux et démarrage du bot. Veuillez patienter...')
-          .setColor(0xf1c40f),
-      ],
-      components: [],
-    });
-
-    try {
-      const guild = interaction.guild;
-
-      // Update config
-      setConfig({
-        guildId: guild.id,
-        updateInterval: session.interval * 60 * 1000,
-        alertThreshold: session.threshold,
-      });
-
-      // Create category and alerts channel
-      const category = await channelManager.ensureCategory(guild);
-      await channelManager.ensureAlertsChannel(guild, category);
-
-      // Add cryptos and create channels
-      for (const symbol of session.cryptos) {
-        const added = addCrypto(symbol, symbol);
-        if (added) {
-          await channelManager.createCryptoChannel(guild, category, symbol);
-        }
-      }
-
-      // Fetch initial quotes
-      try {
-        const quotes = await fetchQuotes(session.cryptos);
-        logger.info('Initial quotes fetched during setup', { count: Object.keys(quotes).length });
-      } catch (err) {
-        logger.warn('Failed to fetch initial quotes during setup', { error: err.message });
-      }
-
-      // Mark setup complete
-      setConfig({ setupComplete: true });
-
-      // Start the scheduler
-      startScheduler(interaction.client);
-
-      const successEmbed = new EmbedBuilder()
-        .setTitle('✅ Configuration terminée !')
-        .setDescription(
-          'Le **Crypto Tracker Bot** est maintenant opérationnel.\n\n' +
-          `⏱️ **Intervalle :** ${session.interval} minutes\n` +
-          `🪙 **Cryptos suivies :** ${session.cryptos.join(', ')}\n` +
-          `🚨 **Seuil d'alerte :** ${session.threshold}%\n\n` +
-          'Utilisez `/panel` pour accéder au panneau d\'administration.\n' +
-          'Utilisez `/track` et `/untrack` pour gérer les cryptos.'
-        )
-        .setColor(0x2ecc71)
-        .setFooter({ text: 'Crypto Tracker Bot' })
-        .setTimestamp();
-
-      await interaction.editReply({ embeds: [successEmbed], components: [] });
-
-      logger.info('Setup completed', {
-        guildId: guild.id,
-        interval: session.interval,
-        cryptos: session.cryptos,
-        threshold: session.threshold,
-      });
-    } catch (err) {
-      logger.error('Setup failed', { error: err.message });
-      await interaction.editReply({
-        embeds: [
-          new EmbedBuilder()
-            .setTitle('❌ Erreur lors du setup')
-            .setDescription(`Une erreur est survenue : \`${err.message}\`\n\nVeuillez réessayer avec \`/setup\`.`)
-            .setColor(0xe74c3c),
-        ],
-        components: [],
-      });
-    } finally {
-      setupSessions.delete(guildId);
+  /**
+   * Execute the /setup command -- start the setup wizard at step 1.
+   */
+  async execute(interaction) {
+    if (!isAdmin(interaction.member)) {
+      return denyPermission(interaction);
     }
-    return;
-  }
 
-  // Handle cancel
-  if (customId === 'setup_cancel') {
-    setupSessions.delete(guildId);
-    await interaction.update({
-      embeds: [
-        new EmbedBuilder()
-          .setTitle('❌ Setup annulé')
-          .setDescription('La configuration a été annulée. Relancez `/setup` pour recommencer.')
-          .setColor(0xe74c3c),
-      ],
-      components: [],
+    const guildId = interaction.guildId;
+    const config = getGuild(guildId);
+    const lang = getLang(config);
+
+    // Check if setup is already complete
+    if (config.setupComplete) {
+      return interaction.reply({
+        content: t('setup.already_done', lang),
+        ephemeral: true,
+      });
+    }
+
+    // Initialize session
+    setupSessions.set(guildId, {
+      userId: interaction.user.id,
+      step: 1,
+      interval: null,
+      cryptos: [],
+      threshold: null,
+      startedAt: Date.now(),
     });
-    return;
-  }
-}
 
-async function handleSelect(interaction) {
-  const guildId = interaction.guild.id;
-  const session = setupSessions.get(guildId);
-
-  if (!session || session.userId !== interaction.user.id) {
-    return interaction.reply({ content: '❌ Session de setup non trouvée ou non autorisée.', ephemeral: true });
-  }
-
-  if (interaction.customId === 'setup_crypto_select') {
-    session.cryptos = interaction.values;
-    session.step = 'threshold';
-
-    // Step 3: Configure alert threshold
+    // Step 1: Choose interval
     const embed = new EmbedBuilder()
-      .setTitle('🛠️ Assistant de Configuration')
-      .setDescription(
-        `✅ Cryptos sélectionnées : **${session.cryptos.join(', ')}**\n\n` +
-        '**Étape 3/4** — Configurez le seuil d\'alerte par défaut :\n' +
-        'Ce seuil déclenche une alerte quand le prix varie de ce pourcentage en 24h.'
-      )
+      .setTitle(t('setup.welcome', lang))
+      .setDescription(t('setup.step_interval', lang))
       .setColor(0x3498db)
-      .addFields({
-        name: '🚨 Seuil d\'alerte',
-        value: 'Sélectionnez le pourcentage de variation qui déclenchera une alerte.',
-      })
-      .setFooter({ text: 'Setup Crypto Tracker Bot' });
+      .setFooter({ text: 'Step 1/4' });
 
     const row = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
-        .setCustomId('setup_threshold_3')
-        .setLabel('3%')
+        .setCustomId('setup_interval_5')
+        .setLabel('5 min')
         .setStyle(ButtonStyle.Secondary),
       new ButtonBuilder()
-        .setCustomId('setup_threshold_5')
-        .setLabel('5%')
+        .setCustomId('setup_interval_10')
+        .setLabel('10 min')
         .setStyle(ButtonStyle.Primary),
       new ButtonBuilder()
-        .setCustomId('setup_threshold_10')
-        .setLabel('10%')
+        .setCustomId('setup_interval_15')
+        .setLabel('15 min')
         .setStyle(ButtonStyle.Secondary),
       new ButtonBuilder()
-        .setCustomId('setup_threshold_15')
-        .setLabel('15%')
+        .setCustomId('setup_interval_30')
+        .setLabel('30 min')
         .setStyle(ButtonStyle.Secondary),
     );
 
-    await interaction.update({ embeds: [embed], components: [row] });
-  }
-}
+    await interaction.reply({ embeds: [embed], components: [row], ephemeral: true });
+  },
 
-module.exports = { data, execute, handleButton, handleSelect };
+  /**
+   * Handle button interactions for the setup wizard.
+   */
+  async handleButton(interaction) {
+    const guildId = interaction.guildId;
+    const session = setupSessions.get(guildId);
+
+    if (!session || session.userId !== interaction.user.id) {
+      return interaction.reply({
+        content: t('error.generic', getLang(getGuild(guildId))),
+        ephemeral: true,
+      });
+    }
+
+    const config = getGuild(guildId);
+    const lang = getLang(config);
+    const customId = interaction.customId;
+
+    // --- Step 1: Interval selection ---
+    if (customId.startsWith('setup_interval_')) {
+      const minutes = parseInt(customId.replace('setup_interval_', ''), 10);
+      session.interval = minutes;
+      session.step = 2;
+
+      // Step 2: Crypto selection
+      const embed = new EmbedBuilder()
+        .setTitle(t('setup.welcome', lang))
+        .setDescription(t('setup.step_cryptos', lang))
+        .setColor(0x3498db)
+        .addFields({
+          name: t('setup.interval_label', lang),
+          value: `${minutes} min`,
+          inline: true,
+        })
+        .setFooter({ text: 'Step 2/4' });
+
+      const selectRow = new ActionRowBuilder().addComponents(
+        new StringSelectMenuBuilder()
+          .setCustomId('setup_crypto_select')
+          .setPlaceholder(t('setup.step_cryptos', lang))
+          .setMinValues(1)
+          .setMaxValues(10)
+          .addOptions(
+            TOP_CRYPTOS.map(c => ({
+              label: `${c.symbol} - ${c.name}`,
+              value: c.symbol,
+              description: c.name,
+            })),
+          ),
+      );
+
+      await interaction.update({ embeds: [embed], components: [selectRow] });
+      return;
+    }
+
+    // --- Step 3: Threshold selection ---
+    if (customId.startsWith('setup_threshold_')) {
+      const threshold = parseInt(customId.replace('setup_threshold_', ''), 10);
+      session.threshold = threshold;
+      session.step = 4;
+
+      // Step 4: Confirmation
+      const cryptoList = session.cryptos.join(', ');
+      const embed = new EmbedBuilder()
+        .setTitle(t('setup.step_confirm', lang))
+        .setColor(0xf1c40f)
+        .addFields(
+          { name: t('setup.interval_label', lang), value: `${session.interval} min`, inline: true },
+          { name: t('setup.cryptos_label', lang), value: cryptoList || 'N/A', inline: true },
+          { name: t('setup.threshold_label', lang), value: `${session.threshold}%`, inline: true },
+        )
+        .setFooter({ text: 'Step 4/4' });
+
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId('setup_confirm')
+          .setLabel(t('setup.confirm_btn', lang))
+          .setStyle(ButtonStyle.Success),
+        new ButtonBuilder()
+          .setCustomId('setup_cancel')
+          .setLabel(t('setup.cancel_btn', lang))
+          .setStyle(ButtonStyle.Danger),
+      );
+
+      await interaction.update({ embeds: [embed], components: [row] });
+      return;
+    }
+
+    // --- Step 4: Confirm ---
+    if (customId === 'setup_confirm') {
+      await interaction.deferUpdate();
+
+      try {
+        const guild = interaction.guild;
+
+        // Create category
+        const category = await channelManager.ensureCategory(guild);
+
+        // Create alerts channel
+        const alertsChannel = await channelManager.ensureAlertsChannel(guild, category);
+
+        // Add cryptos and create channels
+        const channelMentions = [];
+        for (const symbol of session.cryptos) {
+          const cryptoName = TOP_CRYPTOS.find(c => c.symbol === symbol)?.name || symbol;
+          const entry = addCryptoToGuild(guildId, symbol, cryptoName);
+          if (entry) {
+            const channel = await channelManager.createCryptoChannel(guild, category, symbol);
+            updateCryptoInGuild(guildId, symbol, { channelId: channel.id });
+            channelMentions.push(`<#${channel.id}>`);
+          }
+        }
+
+        // Save configuration
+        updateGuild(guildId, {
+          setupComplete: true,
+          updateInterval: session.interval * 60 * 1000,
+          alertThreshold: session.threshold,
+          categoryId: category.id,
+          alertsChannelId: alertsChannel.id,
+        });
+
+        // Fetch initial quotes and send embeds
+        try {
+          const quotes = await fetchQuotes(session.cryptos);
+          const updatedConfig = getGuild(guildId);
+
+          for (const symbol of session.cryptos) {
+            const quote = quotes[symbol];
+            const cryptoData = updatedConfig.cryptos.find(c => c.symbol === symbol);
+            if (quote && cryptoData && cryptoData.channelId) {
+              const channel = guild.channels.cache.get(cryptoData.channelId);
+              if (channel) {
+                const embed = buildPriceEmbed(quote, updatedConfig);
+                const msg = await channel.send({ embeds: [embed] });
+                updateCryptoInGuild(guildId, symbol, { messageId: msg.id });
+              }
+            }
+          }
+        } catch (err) {
+          logger.warn('Failed to fetch initial quotes during setup', { guildId, error: err.message });
+        }
+
+        // Start the scheduler
+        startScheduler(interaction.client);
+
+        // Confirm success
+        const successEmbed = new EmbedBuilder()
+          .setTitle(t('setup.complete', lang))
+          .setColor(0x00ff41)
+          .setDescription(channelMentions.length > 0 ? channelMentions.join('\n') : '')
+          .setTimestamp();
+
+        await interaction.editReply({ embeds: [successEmbed], components: [] });
+
+        logger.info('Setup completed', { guildId, cryptos: session.cryptos, interval: session.interval });
+      } catch (err) {
+        logger.error('Setup failed', { guildId, error: err.message, stack: err.stack });
+        await interaction.editReply({
+          content: t('error.generic', lang),
+          embeds: [],
+          components: [],
+        });
+      } finally {
+        setupSessions.delete(guildId);
+      }
+      return;
+    }
+
+    // --- Step 4: Cancel ---
+    if (customId === 'setup_cancel') {
+      setupSessions.delete(guildId);
+
+      const embed = new EmbedBuilder()
+        .setTitle(t('setup.cancelled', lang))
+        .setColor(0xff0000);
+
+      await interaction.update({ embeds: [embed], components: [] });
+      return;
+    }
+  },
+
+  /**
+   * Handle select menu interactions for the setup wizard.
+   */
+  async handleSelect(interaction) {
+    const guildId = interaction.guildId;
+    const session = setupSessions.get(guildId);
+
+    if (!session || session.userId !== interaction.user.id) {
+      return interaction.reply({
+        content: t('error.generic', getLang(getGuild(guildId))),
+        ephemeral: true,
+      });
+    }
+
+    const config = getGuild(guildId);
+    const lang = getLang(config);
+    const customId = interaction.customId;
+
+    // --- Step 2: Crypto selection ---
+    if (customId === 'setup_crypto_select') {
+      session.cryptos = interaction.values;
+      session.step = 3;
+
+      // Step 3: Threshold selection
+      const cryptoList = session.cryptos.join(', ');
+      const embed = new EmbedBuilder()
+        .setTitle(t('setup.welcome', lang))
+        .setDescription(t('setup.step_threshold', lang))
+        .setColor(0x3498db)
+        .addFields(
+          { name: t('setup.interval_label', lang), value: `${session.interval} min`, inline: true },
+          { name: t('setup.cryptos_label', lang), value: cryptoList, inline: true },
+        )
+        .setFooter({ text: 'Step 3/4' });
+
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId('setup_threshold_3')
+          .setLabel('3%')
+          .setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
+          .setCustomId('setup_threshold_5')
+          .setLabel('5%')
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId('setup_threshold_10')
+          .setLabel('10%')
+          .setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
+          .setCustomId('setup_threshold_15')
+          .setLabel('15%')
+          .setStyle(ButtonStyle.Secondary),
+      );
+
+      await interaction.update({ embeds: [embed], components: [row] });
+      return;
+    }
+  },
+};

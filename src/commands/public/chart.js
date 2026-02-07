@@ -1,200 +1,163 @@
 const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
+const { t, getLang } = require('../../services/i18n');
+const { getGuild } = require('../../database/models/guild');
 const { fetchQuotes } = require('../../services/crypto-api');
+const { formatPrice, formatPercent, getTrendEmoji } = require('../../utils/formatter');
 const cacheService = require('../../services/cache-service');
-const { isValidSymbol } = require('../../utils/validators');
-const { formatPrice, formatPercent } = require('../../utils/formatter');
 const logger = require('../../utils/logger');
 
-const CACHE_TTL = 60000; // 1 minute TTL
-
-const PERIOD_LABELS = {
-  '1h': '1 Heure',
-  '24h': '24 Heures',
-  '7d': '7 Jours',
-  '30d': '30 Jours',
-};
-
-const data = new SlashCommandBuilder()
-  .setName('chart')
-  .setDescription('Afficher un graphique ASCII et des liens vers les charts d\'une crypto')
-  .addStringOption(option =>
-    option
-      .setName('symbol')
-      .setDescription('Symbole de la crypto (ex: BTC, ETH, SOL)')
-      .setRequired(true)
-  )
-  .addStringOption(option =>
-    option
-      .setName('period')
-      .setDescription('Periode du graphique')
-      .setRequired(false)
-      .addChoices(
-        { name: '1 Heure', value: '1h' },
-        { name: '24 Heures', value: '24h' },
-        { name: '7 Jours', value: '7d' },
-        { name: '30 Jours', value: '30d' }
-      )
-  );
+const QUOTE_CACHE_TTL = 60000;
 
 /**
- * Build a text-based mini chart from the price and change percentage.
- * Since we don't have historical data points, we simulate a visual
- * representation using block characters based on the change direction.
- * @param {number} change - Percentage change for the period
+ * Build an ASCII mini bar chart for a given percentage value.
+ * Uses Unicode block characters to visualize the magnitude.
+ * @param {number} value - Percentage value
+ * @param {number} maxWidth - Maximum bar width in characters
  * @returns {string}
  */
-function buildMiniChart(change) {
-  if (change == null || isNaN(change)) return '```\nDonnees insuffisantes\n```';
-
-  const bars = 12;
-  const blocks = [];
-  const isPositive = change >= 0;
-  const magnitude = Math.min(Math.abs(change), 20);
-  const scaledMag = Math.ceil((magnitude / 20) * 6);
-
-  // Generate a simple visual bar representation
-  const baseLevel = 4;
-
-  for (let i = 0; i < bars; i++) {
-    let level;
-    if (isPositive) {
-      // Upward trend: start lower, end higher
-      level = baseLevel + Math.round((i / (bars - 1)) * scaledMag);
-    } else {
-      // Downward trend: start higher, end lower
-      level = baseLevel + scaledMag - Math.round((i / (bars - 1)) * scaledMag);
-    }
-    blocks.push(level);
-  }
-
-  const maxLevel = Math.max(...blocks);
-  const lines = [];
-
-  for (let row = maxLevel; row >= 1; row--) {
-    let line = '';
-    for (let col = 0; col < bars; col++) {
-      if (blocks[col] >= row) {
-        line += isPositive ? '\u2588' : '\u2588'; // Full block
-      } else {
-        line += ' ';
-      }
-    }
-    lines.push(line);
-  }
-
-  const chart = lines.map(l => l).join('\n');
-  const arrow = isPositive ? '/\u203E' : '\\_';
-  const label = isPositive ? 'Tendance haussiere' : change < 0 ? 'Tendance baissiere' : 'Stable';
-
-  return `\`\`\`\n${chart}\n${'='.repeat(bars)}\n${label} ${arrow}\n\`\`\``;
+function buildBar(value, maxWidth = 20) {
+  if (value == null || isNaN(value)) return '░'.repeat(maxWidth);
+  const absValue = Math.min(Math.abs(value), 100);
+  const filled = Math.round((absValue / 100) * maxWidth);
+  const empty = maxWidth - filled;
+  const bar = '▓'.repeat(filled) + '░'.repeat(empty);
+  return value >= 0 ? bar : bar;
 }
 
 /**
- * Get the relevant change value for the selected period.
+ * Build a visual chart embed with change percentages and external links.
  * @param {Object} quote
  * @param {string} period
- * @returns {number|null}
+ * @param {Object} guildConfig
+ * @returns {EmbedBuilder}
  */
-function getChangeForPeriod(quote, period) {
-  switch (period) {
-    case '1h': return quote.change1h;
-    case '24h': return quote.change24h;
-    case '7d': return quote.change7d;
-    case '30d': return quote.change7d; // Best available approximation
-    default: return quote.change24h;
+function buildChartEmbed(quote, period, guildConfig) {
+  const lang = getLang(guildConfig);
+  const change24h = quote.change24h || 0;
+  const trend = getTrendEmoji(change24h);
+
+  // Determine color based on selected period's change
+  const periodChangeMap = {
+    '1h': quote.change1h,
+    '24h': quote.change24h,
+    '7d': quote.change7d,
+    '30d': quote.change7d, // Use 7d as proxy for 30d
+  };
+  const selectedChange = periodChangeMap[period] || change24h;
+  const color = selectedChange > 0 ? 0x00ff41 : selectedChange < 0 ? 0xff0000 : 0x95a5a6;
+
+  // Build the ASCII chart section
+  const changes = [
+    { label: '1h', value: quote.change1h },
+    { label: '24h', value: quote.change24h },
+    { label: '7d', value: quote.change7d },
+  ];
+
+  const chartLines = changes.map(c => {
+    const sign = c.value != null && c.value >= 0 ? '+' : '';
+    const pctStr = c.value != null ? `${sign}${c.value.toFixed(2)}%` : 'N/A';
+    const indicator = c.label === period ? '>' : ' ';
+    return `${indicator} ${c.label.padEnd(4)} ${buildBar(c.value)} ${pctStr}`;
+  });
+
+  const symbolUpper = quote.symbol.toUpperCase();
+  const nameSlug = quote.name.toLowerCase().replace(/\s+/g, '-');
+  const tradingViewUrl = `https://www.tradingview.com/chart/?symbol=${symbolUpper}USDT`;
+  const coinMarketCapUrl = `https://coinmarketcap.com/currencies/${nameSlug}/`;
+
+  const embed = new EmbedBuilder()
+    .setTitle(`${trend} ${quote.name} (${quote.symbol}) — ${t('chart.title', lang)}`)
+    .setColor(color)
+    .setDescription([
+      `**${t('chart.current_price', lang)}:** ${formatPrice(quote.price)}`,
+      `**${t('chart.period', lang)}:** ${period}`,
+      `**${t('chart.selected_change', lang)}:** ${formatPercent(selectedChange)}`,
+      '',
+      `\`\`\``,
+      ...chartLines,
+      `\`\`\``,
+    ].join('\n'))
+    .addFields(
+      {
+        name: t('chart.links', lang),
+        value: [
+          `[TradingView](${tradingViewUrl})`,
+          `[CoinMarketCap](${coinMarketCapUrl})`,
+        ].join(' | '),
+        inline: false,
+      }
+    )
+    .setTimestamp()
+    .setFooter({ text: t('price.footer', lang) });
+
+  if (guildConfig.showLogos !== false && quote.logo) {
+    embed.setThumbnail(quote.logo);
   }
+
+  return embed;
 }
 
-async function execute(interaction) {
-  const symbol = interaction.options.getString('symbol').toUpperCase().trim();
-  const period = interaction.options.getString('period') || '24h';
+module.exports = {
+  data: new SlashCommandBuilder()
+    .setName('chart')
+    .setDescription('Show a visual chart overview for a cryptocurrency')
+    .addStringOption(option =>
+      option
+        .setName('symbol')
+        .setDescription('Crypto symbol (e.g. BTC, ETH, SOL)')
+        .setRequired(true)
+    )
+    .addStringOption(option =>
+      option
+        .setName('period')
+        .setDescription('Time period to highlight')
+        .setRequired(false)
+        .addChoices(
+          { name: '1 Hour', value: '1h' },
+          { name: '24 Hours', value: '24h' },
+          { name: '7 Days', value: '7d' },
+          { name: '30 Days', value: '30d' }
+        )
+    ),
 
-  if (!isValidSymbol(symbol)) {
-    return interaction.reply({
-      content: `Symbole invalide: \`${symbol}\`. Utilisez un symbole valide (ex: BTC, ETH, SOL).`,
-      ephemeral: true,
-    });
-  }
+  async execute(interaction) {
+    const guildConfig = getGuild(interaction.guildId);
+    const lang = getLang(guildConfig);
+    const symbol = interaction.options.getString('symbol').toUpperCase();
+    const period = interaction.options.getString('period') || '24h';
 
-  await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply();
 
-  try {
-    // Check cache first
-    const cacheKey = `quote_${symbol}`;
-    let quote = cacheService.get(cacheKey, CACHE_TTL);
+    try {
+      const cacheKey = `quote_${symbol}`;
+      let quote = cacheService.get(cacheKey, QUOTE_CACHE_TTL);
 
-    if (!quote) {
-      const quotes = await fetchQuotes([symbol]);
-      quote = quotes[symbol];
+      if (!quote) {
+        const quotes = await fetchQuotes([symbol]);
+        quote = quotes[symbol];
 
-      if (quote) {
-        cacheService.set(cacheKey, quote);
+        if (quote) {
+          cacheService.set(cacheKey, quote);
+        }
       }
-    }
 
-    if (!quote) {
-      return interaction.editReply({
-        content: `Crypto \`${symbol}\` introuvable. Verifiez le symbole et reessayez.`,
+      if (!quote) {
+        return interaction.editReply({
+          content: t('price.not_found', lang, { symbol }),
+        });
+      }
+
+      const embed = buildChartEmbed(quote, period, guildConfig);
+      await interaction.editReply({ embeds: [embed] });
+    } catch (err) {
+      logger.error('Chart command error', {
+        guildId: interaction.guildId,
+        symbol,
+        error: err.message,
+      });
+      await interaction.editReply({
+        content: t('errors.api_failed', lang),
       });
     }
-
-    const change = getChangeForPeriod(quote, period);
-    const periodLabel = PERIOD_LABELS[period];
-    const miniChart = buildMiniChart(change);
-
-    const symbolLower = symbol.toLowerCase();
-    const tradingViewUrl = `https://www.tradingview.com/chart/?symbol=${symbol}USDT`;
-    const coinMarketCapUrl = `https://coinmarketcap.com/currencies/${quote.name ? quote.name.toLowerCase().replace(/\s+/g, '-') : symbolLower}/`;
-
-    const color = change != null && change >= 0 ? 0x00ff41 : 0xff0000;
-
-    const embed = new EmbedBuilder()
-      .setTitle(`Chart ${quote.name || symbol} (${symbol}) - ${periodLabel}`)
-      .setColor(color)
-      .addFields(
-        {
-          name: 'Prix Actuel',
-          value: formatPrice(quote.price),
-          inline: true,
-        },
-        {
-          name: `Variation (${periodLabel})`,
-          value: formatPercent(change),
-          inline: true,
-        },
-        {
-          name: 'Rank',
-          value: quote.rank ? `#${quote.rank}` : 'N/A',
-          inline: true,
-        },
-        {
-          name: `Mini Chart (${periodLabel})`,
-          value: miniChart,
-          inline: false,
-        },
-        {
-          name: 'Charts Interactifs',
-          value: [
-            `[TradingView](${tradingViewUrl})`,
-            `[CoinMarketCap](${coinMarketCapUrl})`,
-          ].join(' | '),
-          inline: false,
-        }
-      )
-      .setTimestamp()
-      .setFooter({ text: 'Crypto Tracker Bot' });
-
-    if (quote.logo) {
-      embed.setThumbnail(quote.logo);
-    }
-
-    return interaction.editReply({ embeds: [embed] });
-  } catch (error) {
-    logger.error('Chart command failed', { symbol, period, error: error.message });
-    return interaction.editReply({
-      content: 'Une erreur est survenue lors de la generation du chart. Reessayez plus tard.',
-    });
-  }
-}
-
-module.exports = { data, execute };
+  },
+};

@@ -1,25 +1,32 @@
 const { SlashCommandBuilder } = require('discord.js');
-const { getCryptos } = require('../../database/models/crypto');
+const { t, getLang } = require('../../services/i18n');
+const { getGuild, getGuildCryptos } = require('../../database/models/guild');
 const { buildListEmbed } = require('../../services/embed-builder');
 const logger = require('../../utils/logger');
 
-const data = new SlashCommandBuilder()
-  .setName('list')
-  .setDescription('Afficher la liste des cryptomonnaies trackees');
+module.exports = {
+  data: new SlashCommandBuilder()
+    .setName('list')
+    .setDescription('Show the cryptocurrencies tracked on this server'),
 
-async function execute(interaction) {
-  await interaction.deferReply({ ephemeral: true });
+  async execute(interaction) {
+    const guildConfig = getGuild(interaction.guildId);
+    const lang = getLang(guildConfig);
 
-  try {
-    const cryptos = getCryptos();
-    const embed = buildListEmbed(cryptos);
-    return interaction.editReply({ embeds: [embed] });
-  } catch (error) {
-    logger.error('List command failed', { error: error.message });
-    return interaction.editReply({
-      content: 'Une erreur est survenue lors de la recuperation de la liste. Reessayez plus tard.',
-    });
-  }
-}
+    try {
+      const cryptos = getGuildCryptos(interaction.guildId);
+      const embed = buildListEmbed(cryptos, guildConfig);
 
-module.exports = { data, execute };
+      await interaction.reply({ embeds: [embed] });
+    } catch (err) {
+      logger.error('List command error', {
+        guildId: interaction.guildId,
+        error: err.message,
+      });
+      await interaction.reply({
+        content: t('errors.generic', lang),
+        ephemeral: true,
+      });
+    }
+  },
+};

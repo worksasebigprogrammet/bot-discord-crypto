@@ -1,86 +1,106 @@
 const {
   SlashCommandBuilder,
-  EmbedBuilder,
+  PermissionFlagsBits,
 } = require('discord.js');
 const { isAdmin, denyPermission } = require('../../utils/permissions');
-const { removeCrypto, getCrypto } = require('../../database/models/crypto');
+const { t, getLang } = require('../../services/i18n');
+const { getGuild, getGuildCryptos, getCryptoInGuild, removeCryptoFromGuild } = require('../../database/models/guild');
 const channelManager = require('../../services/channel-manager');
 const { isValidSymbol } = require('../../utils/validators');
 const logger = require('../../utils/logger');
 
-const data = new SlashCommandBuilder()
-  .setName('untrack')
-  .setDescription('Retirer une cryptomonnaie du suivi')
-  .addStringOption(opt =>
-    opt
-      .setName('symbol')
-      .setDescription('Symbole de la crypto à retirer (ex: BTC, ETH)')
-      .setRequired(true)
-  );
+module.exports = {
+  data: new SlashCommandBuilder()
+    .setName('untrack')
+    .setDescription('Retirer une crypto du tracking')
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+    .addStringOption(opt =>
+      opt
+        .setName('symbol')
+        .setDescription('Symbole de la crypto a retirer')
+        .setRequired(true)
+        .setAutocomplete(true),
+    ),
 
-async function execute(interaction) {
-  if (!isAdmin(interaction.member)) {
-    return denyPermission(interaction);
-  }
+  /**
+   * Autocomplete handler: suggest currently tracked cryptos for this guild.
+   */
+  async autocomplete(interaction) {
+    const focused = interaction.options.getFocused().toUpperCase();
+    const guildId = interaction.guildId;
 
-  const rawSymbol = interaction.options.getString('symbol');
-  const symbol = rawSymbol.toUpperCase().trim();
+    try {
+      const tracked = getGuildCryptos(guildId);
+      const filtered = tracked
+        .filter(c =>
+          c.symbol.toUpperCase().startsWith(focused) ||
+          c.name.toUpperCase().startsWith(focused),
+        )
+        .slice(0, 25)
+        .map(c => ({
+          name: `${c.symbol} - ${c.name}`,
+          value: c.symbol,
+        }));
 
-  // Validate symbol
-  if (!isValidSymbol(symbol)) {
-    return interaction.reply({
-      content: `❌ Symbole invalide : \`${rawSymbol}\`.`,
-      ephemeral: true,
-    });
-  }
+      await interaction.respond(filtered);
+    } catch (err) {
+      logger.error('Untrack autocomplete error', { error: err.message });
+      await interaction.respond([]);
+    }
+  },
 
-  // Check if crypto exists
-  const existing = getCrypto(symbol);
-  if (!existing) {
-    return interaction.reply({
-      content: `⚠️ **${symbol}** n'est pas actuellement suivi.`,
-      ephemeral: true,
-    });
-  }
-
-  await interaction.deferReply({ ephemeral: true });
-
-  try {
-    // Delete the channel if it exists
-    if (existing.channelId) {
-      await channelManager.deleteCryptoChannel(interaction.guild, existing.channelId);
+  /**
+   * Execute the /untrack command: remove a crypto from the guild's tracking list.
+   */
+  async execute(interaction) {
+    if (!isAdmin(interaction.member)) {
+      return denyPermission(interaction);
     }
 
-    // Remove from database
-    const removed = removeCrypto(symbol);
+    const guildId = interaction.guildId;
+    const config = getGuild(guildId);
+    const lang = getLang(config);
+    const symbol = interaction.options.getString('symbol').toUpperCase().trim();
 
-    if (!removed) {
-      return interaction.editReply({
-        content: `❌ Impossible de retirer **${symbol}** de la base de données.`,
+    // Validate symbol format
+    if (!isValidSymbol(symbol)) {
+      return interaction.reply({
+        content: t('track.invalid_symbol', lang, { symbol }),
+        ephemeral: true,
       });
     }
 
-    logger.info('Crypto untracked', { symbol, userId: interaction.user.id });
+    // Check if it's being tracked
+    const cryptoEntry = getCryptoInGuild(guildId, symbol);
+    if (!cryptoEntry) {
+      return interaction.reply({
+        content: t('untrack.not_tracked', lang, { symbol }),
+        ephemeral: true,
+      });
+    }
 
-    const embed = new EmbedBuilder()
-      .setTitle('✅ Crypto retirée du suivi')
-      .setDescription(`**${symbol}** a été retiré du suivi.`)
-      .setColor(0xe74c3c)
-      .addFields(
-        { name: '🪙 Symbole', value: symbol, inline: true },
-        { name: '📺 Canal', value: 'Supprimé', inline: true },
-        { name: '📊 Status', value: 'Inactif', inline: true },
-      )
-      .setTimestamp()
-      .setFooter({ text: 'Crypto Tracker Bot' });
+    // Delete the associated Discord channel
+    if (cryptoEntry.channelId) {
+      try {
+        await channelManager.deleteCryptoChannel(interaction.guild, cryptoEntry.channelId);
+      } catch (err) {
+        logger.error('Failed to delete crypto channel during untrack', {
+          guildId,
+          symbol,
+          channelId: cryptoEntry.channelId,
+          error: err.message,
+        });
+      }
+    }
 
-    return interaction.editReply({ embeds: [embed] });
-  } catch (err) {
-    logger.error('Failed to untrack crypto', { symbol, error: err.message });
-    return interaction.editReply({
-      content: `❌ Erreur lors du retrait de **${symbol}** : \`${err.message}\``,
+    // Remove from guild database
+    removeCryptoFromGuild(guildId, symbol);
+
+    logger.info('Crypto untracked', { guildId, symbol });
+
+    return interaction.reply({
+      content: t('untrack.removed', lang, { symbol }),
+      ephemeral: true,
     });
-  }
-}
-
-module.exports = { data, execute };
+  },
+};

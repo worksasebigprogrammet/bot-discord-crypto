@@ -1,8 +1,13 @@
-const { Client, GatewayIntentBits, Collection, Partials } = require('discord.js');
+const { Client, GatewayIntentBits, Collection } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
 const logger = require('../utils/logger');
 
+/**
+ * Create and configure the main Discord client.
+ * Loads all commands from src/commands subdirectories.
+ * @returns {Client}
+ */
 function createClient() {
   const client = new Client({
     intents: [
@@ -10,12 +15,10 @@ function createClient() {
       GatewayIntentBits.GuildMessages,
       GatewayIntentBits.GuildMembers,
     ],
-    partials: [Partials.Channel],
   });
 
+  // Load commands
   client.commands = new Collection();
-
-  // Load commands from all subdirectories
   const commandsPath = path.join(__dirname, '../commands');
   const commandFolders = fs.readdirSync(commandsPath);
 
@@ -26,14 +29,19 @@ function createClient() {
 
     const commandFiles = fs.readdirSync(folderPath).filter(f => f.endsWith('.js'));
     for (const file of commandFiles) {
-      const command = require(path.join(folderPath, file));
-      if (command.data && command.execute) {
-        client.commands.set(command.data.name, command);
-        logger.debug('Loaded command', { name: command.data.name });
+      try {
+        const command = require(path.join(folderPath, file));
+        if (command.data && command.data.name) {
+          client.commands.set(command.data.name, command);
+          logger.debug('Loaded command', { name: command.data.name, file });
+        }
+      } catch (err) {
+        logger.error('Failed to load command', { file, error: err.message });
       }
     }
   }
 
+  logger.info(`Loaded ${client.commands.size} commands`);
   return client;
 }
 

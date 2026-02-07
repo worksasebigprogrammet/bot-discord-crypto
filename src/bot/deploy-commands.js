@@ -29,14 +29,12 @@ const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
     console.log(`Registering ${commands.length} slash commands...`);
 
     if (process.env.DISCORD_GUILD_ID) {
-      // Guild commands (instant update, for development)
       await rest.put(
         Routes.applicationGuildCommands(process.env.DISCORD_CLIENT_ID, process.env.DISCORD_GUILD_ID),
         { body: commands },
       );
       console.log(`Successfully registered ${commands.length} guild commands.`);
     } else {
-      // Global commands (takes up to 1 hour to propagate)
       await rest.put(
         Routes.applicationCommands(process.env.DISCORD_CLIENT_ID),
         { body: commands },

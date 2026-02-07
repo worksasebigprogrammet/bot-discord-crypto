@@ -1,42 +1,50 @@
 const { SlashCommandBuilder } = require('discord.js');
+const { t, getLang } = require('../../services/i18n');
+const { getGuild } = require('../../database/models/guild');
 const { fetchTop } = require('../../services/crypto-api');
 const { buildTopEmbed } = require('../../services/embed-builder');
 const logger = require('../../utils/logger');
 
-const data = new SlashCommandBuilder()
-  .setName('top')
-  .setDescription('Afficher le top des cryptomonnaies par capitalisation')
-  .addIntegerOption(option =>
-    option
-      .setName('count')
-      .setDescription('Nombre de cryptos a afficher (1-25, defaut: 10)')
-      .setRequired(false)
-      .setMinValue(1)
-      .setMaxValue(25)
-  );
+module.exports = {
+  data: new SlashCommandBuilder()
+    .setName('top')
+    .setDescription('Show the top cryptocurrencies by market cap')
+    .addIntegerOption(option =>
+      option
+        .setName('count')
+        .setDescription('Number of cryptos to display (1-25, default 10)')
+        .setRequired(false)
+        .setMinValue(1)
+        .setMaxValue(25)
+    ),
 
-async function execute(interaction) {
-  const count = interaction.options.getInteger('count') || 10;
+  async execute(interaction) {
+    const guildConfig = getGuild(interaction.guildId);
+    const lang = getLang(guildConfig);
+    const count = interaction.options.getInteger('count') || 10;
 
-  await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply();
 
-  try {
-    const cryptos = await fetchTop(count);
+    try {
+      const cryptos = await fetchTop(count);
 
-    if (!cryptos || cryptos.length === 0) {
-      return interaction.editReply({
-        content: 'Impossible de recuperer le classement. Reessayez plus tard.',
+      if (!cryptos || cryptos.length === 0) {
+        return interaction.editReply({
+          content: t('top.empty', lang),
+        });
+      }
+
+      const embed = buildTopEmbed(cryptos, guildConfig);
+      await interaction.editReply({ embeds: [embed] });
+    } catch (err) {
+      logger.error('Top command error', {
+        guildId: interaction.guildId,
+        count,
+        error: err.message,
+      });
+      await interaction.editReply({
+        content: t('errors.api_failed', lang),
       });
     }
-
-    const embed = buildTopEmbed(cryptos);
-    return interaction.editReply({ embeds: [embed] });
-  } catch (error) {
-    logger.error('Top command failed', { count, error: error.message });
-    return interaction.editReply({
-      content: 'Une erreur est survenue lors de la recuperation du classement. Reessayez plus tard.',
-    });
-  }
-}
-
-module.exports = { data, execute };
+  },
+};

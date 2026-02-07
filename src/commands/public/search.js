@@ -1,57 +1,58 @@
 const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
+const { t, getLang } = require('../../services/i18n');
+const { getGuild } = require('../../database/models/guild');
 const { searchCrypto } = require('../../services/crypto-api');
 const logger = require('../../utils/logger');
 
-const data = new SlashCommandBuilder()
-  .setName('search')
-  .setDescription('Rechercher une cryptomonnaie par nom ou symbole')
-  .addStringOption(option =>
-    option
-      .setName('query')
-      .setDescription('Nom ou symbole a rechercher (ex: bitcoin, ETH)')
-      .setRequired(true)
-  );
+module.exports = {
+  data: new SlashCommandBuilder()
+    .setName('search')
+    .setDescription('Search for a cryptocurrency by name or symbol')
+    .addStringOption(option =>
+      option
+        .setName('query')
+        .setDescription('Search query (name or symbol)')
+        .setRequired(true)
+    ),
 
-async function execute(interaction) {
-  const query = interaction.options.getString('query').trim();
+  async execute(interaction) {
+    const guildConfig = getGuild(interaction.guildId);
+    const lang = getLang(guildConfig);
+    const query = interaction.options.getString('query');
 
-  if (!query || query.length < 1) {
-    return interaction.reply({
-      content: 'Veuillez fournir un terme de recherche valide.',
-      ephemeral: true,
-    });
-  }
+    await interaction.deferReply();
 
-  await interaction.deferReply({ ephemeral: true });
+    try {
+      const results = await searchCrypto(query);
 
-  try {
-    const results = await searchCrypto(query);
+      if (!results || results.length === 0) {
+        return interaction.editReply({
+          content: t('search.no_results', lang, { query }),
+        });
+      }
 
-    if (!results || results.length === 0) {
-      return interaction.editReply({
-        content: `Aucun resultat pour \`${query}\`. Essayez un autre terme de recherche.`,
+      const lines = results.map((c, i) => {
+        const rankStr = c.rank ? `#${c.rank}` : 'N/A';
+        return `**${i + 1}.** \`${c.symbol}\` — ${c.name} (${t('search.rank', lang)}: ${rankStr})`;
+      });
+
+      const embed = new EmbedBuilder()
+        .setTitle(t('search.title', lang, { query }))
+        .setDescription(lines.join('\n'))
+        .setColor(0x3498db)
+        .setFooter({ text: t('search.footer', lang, { count: results.length }) })
+        .setTimestamp();
+
+      await interaction.editReply({ embeds: [embed] });
+    } catch (err) {
+      logger.error('Search command error', {
+        guildId: interaction.guildId,
+        query,
+        error: err.message,
+      });
+      await interaction.editReply({
+        content: t('errors.api_failed', lang),
       });
     }
-
-    const lines = results.map((c, i) => {
-      const rank = c.rank ? `#${c.rank}` : 'N/A';
-      return `**${i + 1}.** \`${c.symbol}\` - ${c.name} (Rank: ${rank})`;
-    });
-
-    const embed = new EmbedBuilder()
-      .setTitle(`Resultats de recherche pour "${query}"`)
-      .setDescription(lines.join('\n'))
-      .setColor(0x3498db)
-      .setFooter({ text: `${results.length} resultat(s) trouve(s) - Crypto Tracker Bot` })
-      .setTimestamp();
-
-    return interaction.editReply({ embeds: [embed] });
-  } catch (error) {
-    logger.error('Search command failed', { query, error: error.message });
-    return interaction.editReply({
-      content: 'Une erreur est survenue lors de la recherche. Reessayez plus tard.',
-    });
-  }
-}
-
-module.exports = { data, execute };
+  },
+};

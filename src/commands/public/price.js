@@ -1,66 +1,86 @@
-const { SlashCommandBuilder } = require('discord.js');
-const { fetchQuotes } = require('../../services/crypto-api');
-const cacheService = require('../../services/cache-service');
+const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
+const { t, getLang } = require('../../services/i18n');
+const { getGuild } = require('../../database/models/guild');
+const { fetchQuotes, getCryptoMap } = require('../../services/crypto-api');
 const { buildPriceEmbed } = require('../../services/embed-builder');
-const { getConfig } = require('../../database/models/config');
-const { isValidSymbol } = require('../../utils/validators');
+const cacheService = require('../../services/cache-service');
 const logger = require('../../utils/logger');
 
-const CACHE_TTL = 60000; // 1 minute TTL for price cache
+const QUOTE_CACHE_TTL = 60000; // 60 seconds
 
-const data = new SlashCommandBuilder()
-  .setName('price')
-  .setDescription('Afficher le prix detaille d\'une cryptomonnaie')
-  .addStringOption(option =>
-    option
-      .setName('symbol')
-      .setDescription('Symbole de la crypto (ex: BTC, ETH, SOL)')
-      .setRequired(true)
-  );
+module.exports = {
+  data: new SlashCommandBuilder()
+    .setName('price')
+    .setDescription('Get the current price of a cryptocurrency')
+    .addStringOption(option =>
+      option
+        .setName('symbol')
+        .setDescription('Crypto symbol (e.g. BTC, ETH, SOL)')
+        .setRequired(true)
+        .setAutocomplete(true)
+    ),
 
-async function execute(interaction) {
-  const symbol = interaction.options.getString('symbol').toUpperCase().trim();
+  async autocomplete(interaction) {
+    const focused = interaction.options.getFocused().toUpperCase();
 
-  if (!isValidSymbol(symbol)) {
-    return interaction.reply({
-      content: `Symbole invalide: \`${symbol}\`. Utilisez un symbole valide (ex: BTC, ETH, SOL).`,
-      ephemeral: true,
-    });
-  }
+    try {
+      const cryptoMap = await getCryptoMap();
+      const filtered = cryptoMap
+        .filter(c =>
+          c.symbol.toUpperCase().startsWith(focused) ||
+          c.name.toLowerCase().startsWith(focused.toLowerCase())
+        )
+        .slice(0, 25)
+        .map(c => ({
+          name: `${c.symbol} — ${c.name}`,
+          value: c.symbol.toUpperCase(),
+        }));
 
-  await interaction.deferReply({ ephemeral: true });
-
-  try {
-    // Check cache first
-    const cacheKey = `quote_${symbol}`;
-    let quote = cacheService.get(cacheKey, CACHE_TTL);
-
-    if (!quote) {
-      logger.debug('Cache miss for price command', { symbol });
-      const quotes = await fetchQuotes([symbol]);
-      quote = quotes[symbol];
-
-      if (quote) {
-        cacheService.set(cacheKey, quote);
-      }
-    } else {
-      logger.debug('Cache hit for price command', { symbol });
+      await interaction.respond(filtered);
+    } catch (err) {
+      logger.error('Price autocomplete error', { error: err.message });
+      await interaction.respond([]);
     }
+  },
 
-    if (!quote) {
-      return interaction.editReply({
-        content: `Crypto \`${symbol}\` introuvable. Verifiez le symbole et reessayez.`,
+  async execute(interaction) {
+    const guildConfig = getGuild(interaction.guildId);
+    const lang = getLang(guildConfig);
+    const symbol = interaction.options.getString('symbol').toUpperCase();
+
+    await interaction.deferReply();
+
+    try {
+      // Check cache first
+      const cacheKey = `quote_${symbol}`;
+      let quote = cacheService.get(cacheKey, QUOTE_CACHE_TTL);
+
+      if (!quote) {
+        const quotes = await fetchQuotes([symbol]);
+        quote = quotes[symbol];
+
+        if (quote) {
+          cacheService.set(cacheKey, quote);
+        }
+      }
+
+      if (!quote) {
+        return interaction.editReply({
+          content: t('price.not_found', lang, { symbol }),
+        });
+      }
+
+      const embed = buildPriceEmbed(quote, guildConfig);
+      await interaction.editReply({ embeds: [embed] });
+    } catch (err) {
+      logger.error('Price command error', {
+        guildId: interaction.guildId,
+        symbol,
+        error: err.message,
+      });
+      await interaction.editReply({
+        content: t('errors.api_failed', lang),
       });
     }
-
-    const embed = buildPriceEmbed(quote);
-    return interaction.editReply({ embeds: [embed] });
-  } catch (error) {
-    logger.error('Price command failed', { symbol, error: error.message });
-    return interaction.editReply({
-      content: 'Une erreur est survenue lors de la recuperation du prix. Reessayez plus tard.',
-    });
-  }
-}
-
-module.exports = { data, execute };
+  },
+};

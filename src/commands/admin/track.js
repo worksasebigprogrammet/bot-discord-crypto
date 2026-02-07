@@ -1,119 +1,134 @@
 const {
   SlashCommandBuilder,
-  EmbedBuilder,
+  PermissionFlagsBits,
 } = require('discord.js');
 const { isAdmin, denyPermission } = require('../../utils/permissions');
-const { getConfig } = require('../../database/models/config');
-const { addCrypto, getCrypto } = require('../../database/models/crypto');
+const { t, getLang } = require('../../services/i18n');
+const { getGuild, addCryptoToGuild, getCryptoInGuild, updateCryptoInGuild } = require('../../database/models/guild');
 const channelManager = require('../../services/channel-manager');
-const { fetchQuotes } = require('../../services/crypto-api');
-const { isValidSymbol } = require('../../utils/validators');
+const { fetchQuotes, getCryptoMap } = require('../../services/crypto-api');
 const { buildPriceEmbed } = require('../../services/embed-builder');
+const { isValidSymbol } = require('../../utils/validators');
 const logger = require('../../utils/logger');
 
-const data = new SlashCommandBuilder()
-  .setName('track')
-  .setDescription('Ajouter une cryptomonnaie au suivi')
-  .addStringOption(opt =>
-    opt
-      .setName('symbol')
-      .setDescription('Symbole de la crypto (ex: BTC, ETH, SOL)')
-      .setRequired(true)
-  );
+module.exports = {
+  data: new SlashCommandBuilder()
+    .setName('track')
+    .setDescription('Ajouter une crypto au tracking')
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+    .addStringOption(opt =>
+      opt
+        .setName('symbol')
+        .setDescription('Symbole de la crypto (ex: BTC, ETH, SOL)')
+        .setRequired(true)
+        .setAutocomplete(true),
+    ),
 
-async function execute(interaction) {
-  if (!isAdmin(interaction.member)) {
-    return denyPermission(interaction);
-  }
+  /**
+   * Autocomplete handler: suggest cryptos from the CMC map.
+   */
+  async autocomplete(interaction) {
+    const focused = interaction.options.getFocused().toUpperCase();
 
-  const rawSymbol = interaction.options.getString('symbol');
-  const symbol = rawSymbol.toUpperCase().trim();
-
-  // Validate symbol
-  if (!isValidSymbol(symbol)) {
-    return interaction.reply({
-      content: `❌ Symbole invalide : \`${rawSymbol}\`. Utilisez un symbole valide (ex: BTC, ETH, SOL).`,
-      ephemeral: true,
-    });
-  }
-
-  // Check if already tracked
-  const existing = getCrypto(symbol);
-  if (existing) {
-    return interaction.reply({
-      content: `⚠️ **${symbol}** est déjà suivi.`,
-      ephemeral: true,
-    });
-  }
-
-  // Check setup
-  const config = getConfig();
-  if (!config.categoryId) {
-    return interaction.reply({
-      content: '❌ Le bot n\'est pas encore configuré. Lancez `/setup` d\'abord.',
-      ephemeral: true,
-    });
-  }
-
-  await interaction.deferReply({ ephemeral: true });
-
-  try {
-    // Add to database
-    const crypto = addCrypto(symbol, symbol);
-    if (!crypto) {
-      return interaction.editReply({
-        content: `❌ Impossible d'ajouter **${symbol}** à la base de données.`,
-      });
-    }
-
-    // Create channel
-    const guild = interaction.guild;
-    const category = guild.channels.cache.get(config.categoryId);
-
-    if (!category) {
-      return interaction.editReply({
-        content: '❌ Catégorie introuvable. Veuillez relancer `/setup`.',
-      });
-    }
-
-    const channel = await channelManager.createCryptoChannel(guild, category, symbol);
-
-    // Fetch initial quote
-    let quoteEmbed = null;
     try {
-      const quotes = await fetchQuotes([symbol]);
-      if (quotes[symbol]) {
-        quoteEmbed = buildPriceEmbed(quotes[symbol]);
-        // Send initial price embed to the new channel
-        const msg = await channel.send({ embeds: [quoteEmbed] });
-        const { updateCrypto } = require('../../database/models/crypto');
-        updateCrypto(symbol, { messageId: msg.id });
-      }
+      const cryptoMap = await getCryptoMap();
+      const filtered = cryptoMap
+        .filter(c =>
+          c.symbol.toUpperCase().startsWith(focused) ||
+          c.name.toUpperCase().startsWith(focused),
+        )
+        .slice(0, 25)
+        .map(c => ({
+          name: `${c.symbol} - ${c.name}`,
+          value: c.symbol,
+        }));
+
+      await interaction.respond(filtered);
     } catch (err) {
-      logger.warn('Failed to fetch initial quote for tracked crypto', { symbol, error: err.message });
+      logger.error('Track autocomplete error', { error: err.message });
+      await interaction.respond([]);
+    }
+  },
+
+  /**
+   * Execute the /track command: add a crypto to the guild's tracking list.
+   */
+  async execute(interaction) {
+    if (!isAdmin(interaction.member)) {
+      return denyPermission(interaction);
     }
 
-    logger.info('Crypto tracked', { symbol, channelId: channel.id, userId: interaction.user.id });
+    const guildId = interaction.guildId;
+    const config = getGuild(guildId);
+    const lang = getLang(config);
+    const symbol = interaction.options.getString('symbol').toUpperCase().trim();
 
-    const embed = new EmbedBuilder()
-      .setTitle('✅ Crypto ajoutée au suivi')
-      .setDescription(`**${symbol}** est maintenant suivi par le bot.`)
-      .setColor(0x2ecc71)
-      .addFields(
-        { name: '🪙 Symbole', value: symbol, inline: true },
-        { name: '📺 Canal', value: `<#${channel.id}>`, inline: true },
-        { name: '📊 Status', value: 'Actif', inline: true },
-      )
-      .setTimestamp()
-      .setFooter({ text: 'Crypto Tracker Bot' });
+    // Validate symbol format
+    if (!isValidSymbol(symbol)) {
+      return interaction.reply({
+        content: t('track.invalid_symbol', lang, { symbol }),
+        ephemeral: true,
+      });
+    }
 
-    return interaction.editReply({ embeds: [embed] });
-  } catch (err) {
-    logger.error('Failed to track crypto', { symbol, error: err.message });
-    return interaction.editReply({
-      content: `❌ Erreur lors de l'ajout de **${symbol}** : \`${err.message}\``,
-    });
-  }
-}
+    // Check setup is complete
+    if (!config.setupComplete) {
+      return interaction.reply({
+        content: t('track.setup_required', lang),
+        ephemeral: true,
+      });
+    }
 
-module.exports = { data, execute };
+    // Check if already tracked
+    if (getCryptoInGuild(guildId, symbol)) {
+      return interaction.reply({
+        content: t('track.already_tracked', lang, { symbol }),
+        ephemeral: true,
+      });
+    }
+
+    await interaction.deferReply({ ephemeral: true });
+
+    try {
+      // Verify the symbol exists by fetching a quote
+      const quotes = await fetchQuotes([symbol]);
+      const quote = quotes[symbol];
+
+      if (!quote) {
+        return interaction.editReply({
+          content: t('track.not_found', lang, { symbol }),
+        });
+      }
+
+      // Add to guild database
+      const entry = addCryptoToGuild(guildId, symbol, quote.name || symbol);
+      if (!entry) {
+        return interaction.editReply({
+          content: t('track.already_tracked', lang, { symbol }),
+        });
+      }
+
+      // Create the Discord channel
+      const category = await channelManager.ensureCategory(interaction.guild);
+      const channel = await channelManager.createCryptoChannel(interaction.guild, category, symbol);
+      updateCryptoInGuild(guildId, symbol, { channelId: channel.id });
+
+      // Send initial price embed
+      const updatedConfig = getGuild(guildId);
+      const embed = buildPriceEmbed(quote, updatedConfig);
+      const msg = await channel.send({ embeds: [embed] });
+      updateCryptoInGuild(guildId, symbol, { messageId: msg.id });
+
+      logger.info('Crypto tracked', { guildId, symbol, channelId: channel.id });
+
+      return interaction.editReply({
+        content: t('track.added', lang, { symbol, channel: `<#${channel.id}>` }),
+      });
+    } catch (err) {
+      logger.error('Track command failed', { guildId, symbol, error: err.message, stack: err.stack });
+      return interaction.editReply({
+        content: t('error.api_fail', lang),
+      });
+    }
+  },
+};

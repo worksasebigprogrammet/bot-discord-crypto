@@ -1,6 +1,15 @@
-# Crypto Tracker Bot
+# Crypto Tracker Bot v2.0
 
-Bot Discord professionnel pour tracker les prix de cryptomonnaies en temps reel avec systeme d'alertes, embeds dynamiques et dashboard web.
+Bot Discord multi-serveur pour tracker les prix de cryptomonnaies en temps reel avec alertes, bots externes et support bilingue FR/EN.
+
+## Nouveautes v2.0
+
+- **Multi-serveur** : chaque serveur a sa configuration independante
+- **100+ cryptos** : autocomplete sur `/track` avec 500+ cryptos CoinMarketCap
+- **Bots externes** : creez des bots dedies qui affichent un prix crypto en statut
+- **i18n FR/EN** : toutes les reponses traduites, configurable par serveur
+- **Panel admin ameliore** : boutons, modals, gestion complete
+- **Dashboard web supprime** : tout se gere via Discord
 
 ## Features
 
@@ -8,10 +17,10 @@ Bot Discord professionnel pour tracker les prix de cryptomonnaies en temps reel 
 - Embeds riches avec logos, variations 1h/24h/7j, volume, market cap
 - Channels dynamiques avec noms mis a jour (ex: `📈┃btc-45234-usd`)
 - Systeme d'alertes personnalisables (prix cible, variation %)
-- Dashboard web avec OAuth2 Discord
-- Slash commands completes (20+ commandes)
+- Bots externes avec statut crypto personnalisable (4 formats)
+- 15+ slash commands avec autocomplete
 - CoinMarketCap API avec fallback CoinGecko
-- Cache intelligent pour optimiser les appels API
+- Cache intelligent pour optimiser les appels API (333 calls/jour)
 - Deploiement AWS EC2 avec PM2
 
 ## Prerequis
@@ -27,7 +36,7 @@ Bot Discord professionnel pour tracker les prix de cryptomonnaies en temps reel 
 
 ```bash
 git clone <repo-url>
-cd crypto-tracker-bot
+cd bot-discord-crypto
 ```
 
 ### 2. Installer les dependances
@@ -42,20 +51,14 @@ npm install
 cp .env.example .env
 ```
 
-Editez `.env` avec vos credentials :
+Editez `.env` :
 
 | Variable | Description |
 |----------|-------------|
 | `DISCORD_TOKEN` | Token de votre bot Discord |
 | `DISCORD_CLIENT_ID` | Client ID de l'application Discord |
-| `DISCORD_CLIENT_SECRET` | Client secret (pour le dashboard web) |
 | `DISCORD_GUILD_ID` | ID du serveur Discord (dev: commandes guild) |
 | `CMC_API_KEY` | Cle API CoinMarketCap |
-| `UPDATE_INTERVAL` | Intervalle de MAJ en ms (defaut: 600000 = 10min) |
-| `ALERT_THRESHOLD` | Seuil d'alerte par defaut en % (defaut: 5) |
-| `WEB_PORT` | Port du dashboard web (defaut: 3000) |
-| `SESSION_SECRET` | Secret pour les sessions web |
-| `BASE_URL` | URL de base du dashboard |
 
 ### 4. Enregistrer les slash commands
 
@@ -69,7 +72,7 @@ npm run deploy-commands
 npm start
 ```
 
-En mode developpement (auto-reload) :
+Mode developpement (auto-reload) :
 
 ```bash
 npm run dev
@@ -81,29 +84,45 @@ npm run dev
 
 | Commande | Description |
 |----------|-------------|
-| `/setup` | Configuration guidee interactive |
+| `/setup` | Configuration guidee interactive (4 etapes) |
 | `/config interval <minutes>` | Modifier l'intervalle de MAJ (5-60min) |
 | `/config alert-threshold <percent>` | Seuil d'alertes par defaut |
+| `/config language <FR\|EN>` | Changer la langue du serveur |
 | `/config category <nom>` | Renommer la categorie |
 | `/config reset` | Reset complet de la configuration |
-| `/track <symbol>` | Ajouter une crypto a tracker |
+| `/track <symbol>` | Ajouter une crypto (autocomplete 500+) |
 | `/untrack <symbol>` | Retirer une crypto |
-| `/panel` | Panel d'administration interactif |
-| `/admin stats` | Statistiques du bot |
-| `/admin restart` | Redemarrer le scheduler |
-| `/admin logs [lines]` | Voir les derniers logs |
+| `/panel` | Panel d'administration interactif avec boutons |
+| `/stats` | Statistiques du bot (uptime, RAM, API calls...) |
 | `/reload` | Forcer une mise a jour immediate |
+
+### Bots Externes (Admins uniquement)
+
+| Commande | Description |
+|----------|-------------|
+| `/bot create <token> <crypto>` | Creer un bot avec statut crypto |
+| `/bot list` | Lister les bots externes |
+| `/bot edit <id> <crypto>` | Changer la crypto d'un bot |
+| `/bot delete <id>` | Supprimer un bot externe |
+| `/bot format <id> <format>` | Changer le format (simple/full/minimal/emoji) |
+| `/bot status <text>` | Changer le statut du bot principal |
+
+Formats de statut disponibles :
+- `simple` : `BTC: $95,234.56`
+- `full` : `Bitcoin (BTC) | $95,234.56 | +2.4%`
+- `minimal` : `$95,234.56`
+- `emoji` : `🪙 BTC: $95,234.56 (+2.4% 📈)`
 
 ### Consultation (Tous les membres)
 
 | Commande | Description |
 |----------|-------------|
 | `/price <symbol>` | Prix detaille d'une crypto |
-| `/chart <symbol> [period]` | Graphique avec liens TradingView |
-| `/top [count]` | Top cryptos par market cap |
-| `/compare <symbol1> <symbol2>` | Comparer deux cryptos |
+| `/chart <symbol> [period]` | Graphique ASCII + liens TradingView |
+| `/top [count]` | Top cryptos par market cap (1-25) |
+| `/compare <c1> <c2> [c3] [c4] [c5]` | Comparer 2-5 cryptos |
 | `/search <name>` | Chercher une crypto par nom |
-| `/list` | Liste des cryptos trackees |
+| `/list` | Liste des cryptos trackees sur ce serveur |
 
 ### Alertes (Tous les membres)
 
@@ -116,19 +135,19 @@ npm run dev
 
 Types d'alertes : `above` (au-dessus), `below` (en-dessous), `change` (variation %)
 
-## Dashboard Web
+## Multi-Serveur
 
-Le dashboard est accessible sur `http://localhost:3000` (ou votre domaine).
-
-- **Authentification** : OAuth2 Discord (seuls les admins du serveur ont acces)
-- **Pages** : Dashboard, Gestion Cryptos, Configuration, Logs
+Chaque serveur Discord a sa propre configuration stockee dans `data/guilds/{guildId}.json` :
+- Cryptos trackees independantes
+- Alertes par utilisateur et par serveur
+- Langue (FR/EN), intervalle, seuils, timezone configurables
+- Isolation complete entre serveurs
 
 ## Deploiement AWS EC2
 
-### Configuration initiale du serveur
+### Configuration initiale
 
 ```bash
-# Sur le serveur EC2 Ubuntu
 chmod +x setup.sh
 ./setup.sh
 ```
@@ -136,7 +155,6 @@ chmod +x setup.sh
 ### Deploiement automatise
 
 ```bash
-# Depuis votre machine locale
 export EC2_IP=your-ec2-ip
 export PEM_KEY=~/.ssh/your-key.pem
 chmod +x deploy.sh
@@ -146,16 +164,9 @@ chmod +x deploy.sh
 ### PM2
 
 ```bash
-# Demarrer
 pm2 start ecosystem.config.js
-
-# Status
 pm2 list
-
-# Logs
 pm2 logs crypto-bot
-
-# Restart
 pm2 restart crypto-bot
 ```
 
@@ -167,40 +178,48 @@ src/
 ├── bot/
 │   ├── client.js                # Discord client setup
 │   ├── deploy-commands.js       # Enregistrement slash commands
+│   ├── external-bots.js         # Module bots externes
 │   └── events/
 │       ├── ready.js             # Event bot ready
 │       └── interactionCreate.js # Gestion interactions
 ├── commands/
-│   ├── admin/                   # Commandes admin
-│   ├── public/                  # Commandes publiques
-│   └── alerts/                  # Commandes alertes
+│   ├── admin/                   # setup, config, track, untrack, panel, stats, bot
+│   ├── public/                  # price, chart, top, compare, search, list, reload
+│   └── alerts/                  # alert (set/list/remove/clear)
 ├── services/
-│   ├── crypto-api.js            # CoinMarketCap + CoinGecko
+│   ├── crypto-api.js            # CoinMarketCap + CoinGecko fallback
 │   ├── channel-manager.js       # Gestion channels Discord
-│   ├── embed-builder.js         # Construction embeds
-│   ├── alert-service.js         # Systeme alertes
+│   ├── embed-builder.js         # Construction embeds i18n
+│   ├── alert-service.js         # Systeme alertes multi-serveur
 │   ├── cache-service.js         # Cache intelligent
-│   └── scheduler.js             # Cron jobs updates
+│   ├── scheduler.js             # Updates periodiques
+│   ├── bot-manager.js           # Gestion bots externes
+│   └── i18n.js                  # Systeme de traduction
+├── locales/
+│   ├── fr.json                  # Traductions francais
+│   └── en.json                  # Traductions anglais
 ├── utils/
 │   ├── formatter.js             # Format prix/nombres
 │   ├── logger.js                # Winston config
 │   ├── permissions.js           # Check admin
 │   └── validators.js            # Validation inputs
-├── web/
-│   ├── server.js                # Express app
-│   ├── routes/                  # Routes web
-│   ├── views/                   # Templates EJS
-│   └── public/                  # Assets statiques
 └── database/
     ├── db.js                    # Abstraction DB (JSON)
-    └── models/                  # Models config/crypto/alert
+    └── models/
+        ├── guild.js             # Config par serveur
+        └── bot.js               # Bots externes
+data/
+├── guilds/{guildId}.json        # Config par serveur
+└── bots/{botId}.json            # Config bots externes
 ```
 
-## Limites API
+## Limites
 
-- **CoinMarketCap** : 333 calls/jour (plan gratuit) - le cache reduit la consommation
-- **Discord** : 2 channel name updates / 10min - gere par une queue avec delais
-- **Discord** : 50 slash commands max - les commandes sont groupees en subcommands
+- **CoinMarketCap** : 333 calls/jour (plan gratuit) - cache optimise
+- **Discord** : 2 channel name updates / 10min - queue avec delais
+- **Bots externes** : max 20 par serveur
+- **Alertes** : max 25 par utilisateur par serveur
+- **RAM** : optimise pour EC2 t2.micro (1GB)
 
 ## Licence
 

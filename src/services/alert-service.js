@@ -1,61 +1,74 @@
 const logger = require('../utils/logger');
-const { getActiveAlerts, markTriggered } = require('../database/models/alert');
+const { getAllGuildIds, getGuild, getActiveAlertsInGuild, markAlertTriggered } = require('../database/models/guild');
 const { buildAlertEmbed } = require('./embed-builder');
-const { getConfig } = require('../database/models/config');
 
 let alertsTriggeredCount = 0;
 
 /**
- * Check all active alerts against current quotes and fire if conditions met.
+ * Check all active alerts across all guilds and fire those whose conditions are met.
  * @param {import('discord.js').Client} client
  * @param {Object} quotes - Map of symbol -> quote data
  */
 async function checkAlerts(client, quotes) {
-  const alerts = getActiveAlerts();
-  const config = getConfig();
+  const guildIds = getAllGuildIds();
 
-  if (!config.alertsChannelId) return;
+  for (const guildId of guildIds) {
+    const config = getGuild(guildId);
+    if (!config.setupComplete || !config.alertsChannelId) continue;
 
-  const guild = client.guilds.cache.first();
-  if (!guild) return;
+    const guild = client.guilds.cache.get(guildId);
+    if (!guild) continue;
 
-  const alertsChannel = guild.channels.cache.get(config.alertsChannelId);
-  if (!alertsChannel) return;
+    const alertsChannel = guild.channels.cache.get(config.alertsChannelId);
+    if (!alertsChannel) continue;
 
-  for (const alert of alerts) {
-    const quote = quotes[alert.symbol];
-    if (!quote) continue;
+    const alerts = getActiveAlertsInGuild(guildId);
 
-    let triggered = false;
+    for (const alert of alerts) {
+      const quote = quotes[alert.symbol];
+      if (!quote) continue;
 
-    switch (alert.type) {
-      case 'above':
-        if (quote.price >= alert.value) triggered = true;
-        break;
-      case 'below':
-        if (quote.price <= alert.value) triggered = true;
-        break;
-      case 'change':
-        if (alert.value > 0 && quote.change24h >= alert.value) triggered = true;
-        if (alert.value < 0 && quote.change24h <= alert.value) triggered = true;
-        break;
-    }
+      let triggered = false;
 
-    if (triggered) {
-      try {
-        markTriggered(alert.id);
-        alertsTriggeredCount++;
+      switch (alert.type) {
+        case 'above':
+          if (quote.price >= alert.value) triggered = true;
+          break;
+        case 'below':
+          if (quote.price <= alert.value) triggered = true;
+          break;
+        case 'change':
+          if (alert.value > 0 && quote.change24h >= alert.value) triggered = true;
+          if (alert.value < 0 && quote.change24h <= alert.value) triggered = true;
+          break;
+      }
 
-        const embed = buildAlertEmbed(alert, quote);
-        const mention = config.mentionHere ? '@here ' : '';
-        await alertsChannel.send({
-          content: `${mention}<@${alert.userId}>`,
-          embeds: [embed],
-        });
+      if (triggered) {
+        try {
+          markAlertTriggered(guildId, alert.id);
+          alertsTriggeredCount++;
 
-        logger.info('Alert triggered', { alertId: alert.id, symbol: alert.symbol, type: alert.type });
-      } catch (err) {
-        logger.error('Failed to send alert', { alertId: alert.id, error: err.message });
+          const embed = buildAlertEmbed(alert, quote, config);
+          const mention = config.mentionHere ? '@here ' : '';
+          await alertsChannel.send({
+            content: `${mention}<@${alert.userId}>`,
+            embeds: [embed],
+          });
+
+          logger.info('Alert triggered', {
+            guildId,
+            alertId: alert.id,
+            symbol: alert.symbol,
+            type: alert.type,
+            userId: alert.userId,
+          });
+        } catch (err) {
+          logger.error('Failed to send alert notification', {
+            guildId,
+            alertId: alert.id,
+            error: err.message,
+          });
+        }
       }
     }
   }
