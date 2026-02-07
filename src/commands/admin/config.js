@@ -5,6 +5,7 @@ const {
   ButtonBuilder,
   ButtonStyle,
   PermissionFlagsBits,
+  MessageFlags,
 } = require('discord.js');
 const { isAdmin, denyPermission } = require('../../utils/permissions');
 const { t, getLang } = require('../../services/i18n');
@@ -95,7 +96,7 @@ module.exports = {
       if (!isValidInterval(minutes)) {
         return interaction.reply({
           content: t('error.invalid_interval', lang),
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
       }
 
@@ -106,7 +107,7 @@ module.exports = {
 
       return interaction.reply({
         content: t('config.interval_set', lang, { value: minutes }),
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
     }
 
@@ -117,7 +118,7 @@ module.exports = {
       if (!isValidThreshold(percent)) {
         return interaction.reply({
           content: t('error.invalid_threshold', lang),
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
       }
 
@@ -127,7 +128,7 @@ module.exports = {
 
       return interaction.reply({
         content: t('config.threshold_set', lang, { value: percent }),
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
     }
 
@@ -145,7 +146,7 @@ module.exports = {
 
       return interaction.reply({
         content: t('config.language_set', confirmLang, { value: langLabel }),
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
     }
 
@@ -169,7 +170,7 @@ module.exports = {
 
       return interaction.reply({
         content: t('config.category_renamed', lang, { value: name }),
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
     }
 
@@ -191,7 +192,7 @@ module.exports = {
           .setStyle(ButtonStyle.Secondary),
       );
 
-      return interaction.reply({ embeds: [embed], components: [row], ephemeral: true });
+      return interaction.reply({ embeds: [embed], components: [row], flags: MessageFlags.Ephemeral });
     }
   },
 

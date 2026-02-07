@@ -1,4 +1,4 @@
-const { SlashCommandBuilder } = require('discord.js');
+const { SlashCommandBuilder, MessageFlags } = require('discord.js');
 const { t, getLang } = require('../../services/i18n');
 const { getGuild } = require('../../database/models/guild');
 const { isAdmin } = require('../../utils/permissions');
@@ -18,7 +18,7 @@ module.exports = {
     if (!isAdmin(interaction.member)) {
       return interaction.reply({
         content: t('errors.no_permission', lang),
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
     }
 

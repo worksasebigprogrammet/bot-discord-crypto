@@ -1,4 +1,4 @@
-const { SlashCommandBuilder } = require('discord.js');
+const { SlashCommandBuilder, MessageFlags } = require('discord.js');
 const { t, getLang } = require('../../services/i18n');
 const { getGuild } = require('../../database/models/guild');
 const { fetchQuotes } = require('../../services/crypto-api');
@@ -56,7 +56,7 @@ module.exports = {
     if (unique.length !== symbols.length) {
       return interaction.reply({
         content: t('compare.duplicate_error', lang),
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
     }
 

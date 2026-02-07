@@ -1,6 +1,7 @@
 const {
   SlashCommandBuilder,
   PermissionFlagsBits,
+  MessageFlags,
 } = require('discord.js');
 const { isAdmin, denyPermission } = require('../../utils/permissions');
 const { t, getLang } = require('../../services/i18n');
@@ -67,7 +68,7 @@ module.exports = {
     if (!isValidSymbol(symbol)) {
       return interaction.reply({
         content: t('track.invalid_symbol', lang, { symbol }),
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
     }
 
@@ -75,7 +76,7 @@ module.exports = {
     if (!config.setupComplete) {
       return interaction.reply({
         content: t('track.setup_required', lang),
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
     }
 
@@ -83,11 +84,11 @@ module.exports = {
     if (getCryptoInGuild(guildId, symbol)) {
       return interaction.reply({
         content: t('track.already_tracked', lang, { symbol }),
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
     }
 
-    await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
     try {
       // Verify the symbol exists by fetching a quote

@@ -1,6 +1,7 @@
 const {
   SlashCommandBuilder,
   PermissionFlagsBits,
+  MessageFlags,
 } = require('discord.js');
 const { isAdmin, denyPermission } = require('../../utils/permissions');
 const { t, getLang } = require('../../services/i18n');
@@ -66,7 +67,7 @@ module.exports = {
     if (!isValidSymbol(symbol)) {
       return interaction.reply({
         content: t('track.invalid_symbol', lang, { symbol }),
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
     }
 
@@ -75,7 +76,7 @@ module.exports = {
     if (!cryptoEntry) {
       return interaction.reply({
         content: t('untrack.not_tracked', lang, { symbol }),
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
     }
 
@@ -100,7 +101,7 @@ module.exports = {
 
     return interaction.reply({
       content: t('untrack.removed', lang, { symbol }),
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral,
     });
   },
 };

@@ -1,4 +1,4 @@
-const { SlashCommandBuilder, EmbedBuilder, PermissionFlagsBits, ActivityType } = require('discord.js');
+const { SlashCommandBuilder, EmbedBuilder, PermissionFlagsBits, ActivityType, MessageFlags } = require('discord.js');
 const { isAdmin, denyPermission } = require('../../utils/permissions');
 const { t, getLang } = require('../../services/i18n');
 const { getGuild } = require('../../database/models/guild');
@@ -128,7 +128,7 @@ module.exports = {
       if (interaction.deferred || interaction.replied) {
         await interaction.editReply({ content });
       } else {
-        await interaction.reply({ content, ephemeral: true });
+        await interaction.reply({ content, flags: MessageFlags.Ephemeral });
       }
     }
   },
@@ -139,7 +139,7 @@ module.exports = {
  */
 async function handleCreate(interaction, guildId, lang) {
   // Defer ephemeral — token validation can take a few seconds
-  await interaction.deferReply({ ephemeral: true });
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
   const token = interaction.options.getString('token');
   const crypto = interaction.options.getString('crypto').toUpperCase().trim();
@@ -185,7 +185,7 @@ async function handleList(interaction, guildId, lang, guildConfig) {
   if (!bots || bots.length === 0) {
     return interaction.reply({
       content: t('bot.list_empty', lang),
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral,
     });
   }
 
@@ -202,7 +202,7 @@ async function handleList(interaction, guildId, lang, guildConfig) {
   embed.setDescription(lines.join('\n'));
   embed.setFooter({ text: `${bots.length}/${MAX_BOTS}` });
 
-  return interaction.reply({ embeds: [embed], ephemeral: true });
+  return interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
 }
 
 /**
@@ -215,7 +215,7 @@ async function handleEdit(interaction, guildId, lang) {
   if (!isValidSymbol(crypto)) {
     return interaction.reply({
       content: t('track.invalid_symbol', lang, { symbol: crypto }),
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral,
     });
   }
 
@@ -223,7 +223,7 @@ async function handleEdit(interaction, guildId, lang) {
   if (!bot || bot.guildId !== guildId) {
     return interaction.reply({
       content: t('bot.not_found', lang, { id: botId }),
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral,
     });
   }
 
@@ -237,7 +237,7 @@ async function handleEdit(interaction, guildId, lang) {
 
   return interaction.reply({
     content: t('bot.edited', lang, { id: botId, crypto }),
-    ephemeral: true,
+    flags: MessageFlags.Ephemeral,
   });
 }
 
@@ -251,7 +251,7 @@ async function handleDelete(interaction, guildId, lang) {
   if (!bot || bot.guildId !== guildId) {
     return interaction.reply({
       content: t('bot.not_found', lang, { id: botId }),
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral,
     });
   }
 
@@ -260,7 +260,7 @@ async function handleDelete(interaction, guildId, lang) {
 
   return interaction.reply({
     content: t('bot.deleted', lang, { id: botId }),
-    ephemeral: true,
+    flags: MessageFlags.Ephemeral,
   });
 }
 
@@ -275,7 +275,7 @@ async function handleFormat(interaction, guildId, lang) {
   if (!bot || bot.guildId !== guildId) {
     return interaction.reply({
       content: t('bot.not_found', lang, { id: botId }),
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral,
     });
   }
 
@@ -283,7 +283,7 @@ async function handleFormat(interaction, guildId, lang) {
 
   return interaction.reply({
     content: t('bot.format_set', lang, { id: botId, format }),
-    ephemeral: true,
+    flags: MessageFlags.Ephemeral,
   });
 }
 
@@ -302,7 +302,7 @@ async function handleStatus(interaction, lang) {
 
     return interaction.reply({
       content: t('bot.status_reset', lang),
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral,
     });
   }
 
@@ -317,6 +317,6 @@ async function handleStatus(interaction, lang) {
 
   return interaction.reply({
     content: t('bot.status_set', lang, { status: text }),
-    ephemeral: true,
+    flags: MessageFlags.Ephemeral,
   });
 }

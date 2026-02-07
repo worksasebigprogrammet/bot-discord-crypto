@@ -1,4 +1,4 @@
-const { PermissionFlagsBits } = require('discord.js');
+const { PermissionFlagsBits, MessageFlags } = require('discord.js');
 
 /**
  * Check if a guild member has admin permissions.
@@ -20,7 +20,7 @@ async function denyPermission(interaction) {
   if (interaction.deferred || interaction.replied) {
     return interaction.editReply({ content: msg });
   }
-  return interaction.reply({ content: msg, ephemeral: true });
+  return interaction.reply({ content: msg, flags: MessageFlags.Ephemeral });
 }
 
 module.exports = { isAdmin, denyPermission };

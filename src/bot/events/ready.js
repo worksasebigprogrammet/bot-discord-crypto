@@ -5,7 +5,7 @@ const { startAllBots, updateAllBotStatuses } = require('../../services/bot-manag
 const { getAllGuildIds, getGuild } = require('../../database/models/guild');
 
 module.exports = {
-  name: 'ready',
+  name: 'clientReady',
   once: true,
   async execute(client) {
     logger.info(`Bot ready! Logged in as ${client.user.tag}`);

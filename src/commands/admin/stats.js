@@ -1,6 +1,7 @@
 const {
   SlashCommandBuilder,
   PermissionFlagsBits,
+  MessageFlags,
 } = require('discord.js');
 const { isAdmin, denyPermission } = require('../../utils/permissions');
 const { t, getLang } = require('../../services/i18n');
@@ -31,7 +32,7 @@ module.exports = {
     const config = getGuild(guildId);
     const lang = getLang(config);
 
-    await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
     try {
       // Uptime

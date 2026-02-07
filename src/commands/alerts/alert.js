@@ -1,4 +1,4 @@
-const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
+const { SlashCommandBuilder, EmbedBuilder, MessageFlags } = require('discord.js');
 const { t, getLang } = require('../../services/i18n');
 const { getGuild, addAlertToGuild, removeAlertFromGuild, getUserAlertsInGuild, clearUserAlertsInGuild } = require('../../database/models/guild');
 const { formatPrice, formatPercent } = require('../../utils/formatter');
@@ -83,7 +83,7 @@ module.exports = {
       if (interaction.deferred || interaction.replied) {
         await interaction.editReply({ content });
       } else {
-        await interaction.reply({ content, ephemeral: true });
+        await interaction.reply({ content, flags: MessageFlags.Ephemeral });
       }
     }
   },
@@ -101,7 +101,7 @@ async function handleSet(interaction, guildId, userId, lang) {
   if (!isValidSymbol(symbol)) {
     return interaction.reply({
       content: t('track.invalid_symbol', lang, { symbol }),
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral,
     });
   }
 
@@ -109,7 +109,7 @@ async function handleSet(interaction, guildId, userId, lang) {
   if ((type === 'above' || type === 'below') && !isValidPrice(value)) {
     return interaction.reply({
       content: t('error.invalid_threshold', lang),
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral,
     });
   }
 
@@ -119,7 +119,7 @@ async function handleSet(interaction, guildId, userId, lang) {
   if (!alert) {
     return interaction.reply({
       content: t('alert.max_reached', lang),
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral,
     });
   }
 
@@ -133,7 +133,7 @@ async function handleSet(interaction, guildId, userId, lang) {
 
   return interaction.reply({
     content: t('alert.set', lang, { symbol, type: typeLabel, value: formattedValue }),
-    ephemeral: true,
+    flags: MessageFlags.Ephemeral,
   });
 }
 
@@ -146,7 +146,7 @@ async function handleList(interaction, guildId, userId, lang, guildConfig) {
   if (!alerts || alerts.length === 0) {
     return interaction.reply({
       content: t('alert.list_empty', lang),
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral,
     });
   }
 
@@ -165,7 +165,7 @@ async function handleList(interaction, guildId, userId, lang, guildConfig) {
 
   embed.setDescription(lines.join('\n'));
 
-  return interaction.reply({ embeds: [embed], ephemeral: true });
+  return interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
 }
 
 /**
@@ -179,13 +179,13 @@ async function handleRemove(interaction, guildId, userId, lang) {
   if (!removed) {
     return interaction.reply({
       content: t('alert.not_found', lang, { id: alertId }),
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral,
     });
   }
 
   return interaction.reply({
     content: t('alert.removed', lang, { id: alertId }),
-    ephemeral: true,
+    flags: MessageFlags.Ephemeral,
   });
 }
 
@@ -197,6 +197,6 @@ async function handleClear(interaction, guildId, userId, lang) {
 
   return interaction.reply({
     content: t('alert.cleared', lang, { count }),
-    ephemeral: true,
+    flags: MessageFlags.Ephemeral,
   });
 }

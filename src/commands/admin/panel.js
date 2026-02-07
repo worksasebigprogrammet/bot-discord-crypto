@@ -8,6 +8,7 @@ const {
   TextInputBuilder,
   TextInputStyle,
   PermissionFlagsBits,
+  MessageFlags,
 } = require('discord.js');
 const { isAdmin, denyPermission } = require('../../utils/permissions');
 const { t, getLang } = require('../../services/i18n');
@@ -105,7 +106,7 @@ module.exports = {
     await interaction.reply({
       embeds: [embed],
       components: [row1, row2],
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral,
     });
   },
 
@@ -181,7 +182,7 @@ module.exports = {
 
     // --- Stats ---
     if (customId === 'panel_stats') {
-      await interaction.deferReply({ ephemeral: true });
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
       const uptime = formatUptime(global.botStartTime);
       const servers = interaction.client.guilds.cache.size;
@@ -211,7 +212,7 @@ module.exports = {
 
     // --- Force Update ---
     if (customId === 'panel_update') {
-      await interaction.deferReply({ ephemeral: true });
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
       try {
         const start = Date.now();
@@ -340,25 +341,25 @@ module.exports = {
       if (!isValidSymbol(symbol)) {
         return interaction.reply({
           content: t('track.invalid_symbol', lang, { symbol }),
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
       }
 
       if (getCryptoInGuild(guildId, symbol)) {
         return interaction.reply({
           content: t('track.already_tracked', lang, { symbol }),
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
       }
 
       if (!config.setupComplete) {
         return interaction.reply({
           content: t('track.setup_required', lang),
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
       }
 
-      await interaction.deferReply({ ephemeral: true });
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
       try {
         const quotes = await fetchQuotes([symbol]);
@@ -406,7 +407,7 @@ module.exports = {
       if (!isValidSymbol(symbol)) {
         return interaction.reply({
           content: t('track.invalid_symbol', lang, { symbol }),
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
       }
 
@@ -414,7 +415,7 @@ module.exports = {
       if (!cryptoEntry) {
         return interaction.reply({
           content: t('untrack.not_tracked', lang, { symbol }),
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
       }
 
@@ -432,7 +433,7 @@ module.exports = {
 
       return interaction.reply({
         content: t('untrack.removed', lang, { symbol }),
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
     }
 
@@ -444,7 +445,7 @@ module.exports = {
       if (!isValidInterval(minutes)) {
         return interaction.reply({
           content: t('error.invalid_interval', lang),
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
       }
 
@@ -455,7 +456,7 @@ module.exports = {
 
       return interaction.reply({
         content: t('config.interval_set', lang, { value: minutes }),
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
     }
   },

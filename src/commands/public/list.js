@@ -1,4 +1,4 @@
-const { SlashCommandBuilder } = require('discord.js');
+const { SlashCommandBuilder, MessageFlags } = require('discord.js');
 const { t, getLang } = require('../../services/i18n');
 const { getGuild, getGuildCryptos } = require('../../database/models/guild');
 const { buildListEmbed } = require('../../services/embed-builder');
@@ -25,7 +25,7 @@ module.exports = {
       });
       await interaction.reply({
         content: t('errors.generic', lang),
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
     }
   },

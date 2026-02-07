@@ -6,6 +6,7 @@ const {
   ButtonStyle,
   StringSelectMenuBuilder,
   PermissionFlagsBits,
+  MessageFlags,
 } = require('discord.js');
 const { isAdmin, denyPermission } = require('../../utils/permissions');
 const { t, getLang } = require('../../services/i18n');
@@ -54,7 +55,7 @@ module.exports = {
     if (config.setupComplete) {
       return interaction.reply({
         content: t('setup.already_done', lang),
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
     }
 
@@ -94,7 +95,7 @@ module.exports = {
         .setStyle(ButtonStyle.Secondary),
     );
 
-    await interaction.reply({ embeds: [embed], components: [row], ephemeral: true });
+    await interaction.reply({ embeds: [embed], components: [row], flags: MessageFlags.Ephemeral });
   },
 
   /**
@@ -107,7 +108,7 @@ module.exports = {
     if (!session || session.userId !== interaction.user.id) {
       return interaction.reply({
         content: t('error.generic', getLang(getGuild(guildId))),
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
     }
 
@@ -289,7 +290,7 @@ module.exports = {
     if (!session || session.userId !== interaction.user.id) {
       return interaction.reply({
         content: t('error.generic', getLang(getGuild(guildId))),
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
     }
 

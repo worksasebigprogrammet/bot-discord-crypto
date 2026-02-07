@@ -1,3 +1,4 @@
+const { MessageFlags } = require('discord.js');
 const logger = require('../../utils/logger');
 
 module.exports = {
@@ -38,7 +39,7 @@ module.exports = {
           if (interaction.deferred || interaction.replied) {
             await interaction.editReply({ content: msg });
           } else {
-            await interaction.reply({ content: msg, ephemeral: true });
+            await interaction.reply({ content: msg, flags: MessageFlags.Ephemeral });
           }
         } catch { /* ignore follow-up errors */ }
       }
@@ -57,7 +58,7 @@ module.exports = {
             logger.error('Button handler error', { customId, error: err.message });
             try {
               if (!interaction.replied && !interaction.deferred) {
-                await interaction.reply({ content: '❌ Erreur.', ephemeral: true });
+                await interaction.reply({ content: '❌ Erreur.', flags: MessageFlags.Ephemeral });
               }
             } catch { /* ignore */ }
           }
@@ -78,7 +79,7 @@ module.exports = {
             logger.error('Select menu handler error', { customId, error: err.message });
             try {
               if (!interaction.replied && !interaction.deferred) {
-                await interaction.reply({ content: '❌ Erreur.', ephemeral: true });
+                await interaction.reply({ content: '❌ Erreur.', flags: MessageFlags.Ephemeral });
               }
             } catch { /* ignore */ }
           }
@@ -99,7 +100,7 @@ module.exports = {
             logger.error('Modal handler error', { customId, error: err.message });
             try {
               if (!interaction.replied && !interaction.deferred) {
-                await interaction.reply({ content: '❌ Erreur.', ephemeral: true });
+                await interaction.reply({ content: '❌ Erreur.', flags: MessageFlags.Ephemeral });
               }
             } catch { /* ignore */ }
           }
